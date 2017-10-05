@@ -21,9 +21,12 @@ import geotrellis.spark.io._
 import geotrellis.spark.io.avro._
 import geotrellis.spark.io.avro.codecs._
 import geotrellis.spark.io.index._
+import geotrellis.spark.merge._
 import geotrellis.util._
 
 import org.apache.spark.rdd.RDD
+import org.apache.spark.SparkContext
+
 import spray.json._
 
 import scala.reflect._
@@ -33,8 +36,65 @@ class AccumuloLayerWriter(
   instance: AccumuloInstance,
   table: String,
   options: AccumuloLayerWriter.Options
-) extends LayerWriter[LayerId] {
+) extends LayerWriter[LayerId] with LazyLogging {
 
+  // Layer Updating
+  def overwrite[
+    K: AvroRecordCodec: Boundable: JsonFormat: ClassTag,
+    V: AvroRecordCodec: ClassTag,
+    M: JsonFormat: GetComponent[?, Bounds[K]]: Mergable
+  ](
+    id: LayerId,
+    rdd: RDD[(K, V)] with Metadata[M]
+  ): Unit = {
+    update(id, rdd, None)
+  }
+
+  def update[
+    K: AvroRecordCodec: Boundable: JsonFormat: ClassTag,
+    V: AvroRecordCodec: ClassTag,
+    M: JsonFormat: GetComponent[?, Bounds[K]]: Mergable
+  ](
+    id: LayerId,
+    rdd: RDD[(K, V)] with Metadata[M],
+    mergeFunc: (V, V) => V
+  ): Unit = {
+    update(id, rdd, Some(mergeFunc))
+  }
+
+  private def update[
+    K: AvroRecordCodec: Boundable: JsonFormat: ClassTag,
+    V: AvroRecordCodec: ClassTag,
+    M: JsonFormat: GetComponent[?, Bounds[K]]: Mergable
+  ](
+    id: LayerId,
+    rdd: RDD[(K, V)] with Metadata[M],
+    mergeFunc: Option[(V, V) => V]
+  ) = {
+    validateUpdate[AccumuloLayerHeader, K, V, M](id, rdd.metadata) match {
+      case Some(LayerAttributes(header, metadata, keyIndex, writerSchema)) =>
+
+        val table = header.tileTable
+        val encodeKey = (key: K) => AccumuloKeyEncoder.encode(id, key, keyIndex.toIndex(key))
+
+        options.writeStrategy match {
+          case _: HdfsWriteStrategy =>
+            throw new IllegalArgumentException("HDFS Write strategy not supported in updates")
+          case writeStrategy =>
+            logger.info(s"Writing updated for layer ${id} to table $table")
+
+            attributeStore.writeLayerAttributes(id, header, metadata, keyIndex, writerSchema)
+            AccumuloRDDWriter.update(
+              rdd, instance, encodeKey, writeStrategy, table,
+              Some(writerSchema), mergeFunc
+            )
+        }
+      case None =>
+        logger.warn(s"Skipping update with empty bounds for layer $id.")
+    }
+  }
+
+  // Layer Writing
   protected def _write[
     K: AvroRecordCodec: JsonFormat: ClassTag,
     V: AvroRecordCodec: ClassTag,

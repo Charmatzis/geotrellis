@@ -16,13 +16,20 @@
 
 package geotrellis.spark.io.hbase
 
-import geotrellis.spark.LayerId
 import geotrellis.spark.io.avro._
 import geotrellis.spark.io.avro.codecs._
+import geotrellis.spark.LayerId
+import geotrellis.spark.util.KryoWrapper
 
-import org.apache.hadoop.hbase.client.Put
+import org.apache.avro.Schema
+import org.apache.hadoop.hbase.client.{Put, Result, Scan}
+import org.apache.hadoop.hbase.filter.CompareFilter.CompareOp
+import org.apache.hadoop.hbase.filter.{BinaryComparator, FilterList, MultiRowRangeFilter, PrefixFilter, RowFilter}
 import org.apache.hadoop.hbase.{HColumnDescriptor, HTableDescriptor, TableName}
 import org.apache.spark.rdd.RDD
+
+import scala.collection.JavaConverters._
+
 
 object HBaseRDDWriter {
 
@@ -36,6 +43,16 @@ object HBaseRDDWriter {
     layerId: LayerId,
     decomposeKey: K => Long,
     table: String
+  ): Unit = update(raster, instance, layerId, decomposeKey, table, None, None)
+
+  private[hbase] def update[K: AvroRecordCodec, V: AvroRecordCodec](
+    raster: RDD[(K, V)],
+    instance: HBaseInstance,
+    layerId: LayerId,
+    decomposeKey: K => Long,
+    table: String,
+    writerSchema: Option[Schema],
+    mergeFunc: Option[(V,V) => V]
   ): Unit = {
     implicit val sc = raster.sparkContext
 
@@ -51,25 +68,59 @@ object HBaseRDDWriter {
       }
     }
 
+    val _recordCodec = KeyValueRecordCodec[K, V]
+    val kwWriterSchema = KryoWrapper(writerSchema) // Avro Schema is not Serializable
+
     // Call groupBy with numPartitions; if called without that argument or a partitioner,
     // groupBy will reuse the partitioner on the parent RDD if it is set, which could be typed
     // on a key type that may no longer by valid for the key type of the resulting RDD.
-
     raster.groupBy({ row => decomposeKey(row._1) }, numPartitions = raster.partitions.length)
       .foreachPartition { partition: Iterator[(Long, Iterable[(K, V)])] =>
         if(partition.nonEmpty) {
           instance.withConnectionDo { connection =>
             val mutator = connection.getBufferedMutator(table)
+            val tableConnection = connection.getTable(table)
 
             partition.foreach { recs =>
               val id = recs._1
-              val pairs = recs._2.toVector
-              val bytes = AvroEncoder.toBinary(pairs)(codec)
+              val kvs1 = recs._2.toVector
+              val kvs2: Vector[(K,V)] =
+                if (mergeFunc.isDefined) {
+                  val scan = new Scan()
+                  scan.addFamily(tilesCF)
+                  scan.setFilter(
+                    new FilterList(
+                      new PrefixFilter(HBaseRDDWriter.layerIdString(layerId)),
+                      new RowFilter(CompareOp.EQUAL, new BinaryComparator(HBaseKeyEncoder.encode(layerId, id)))
+                    )
+                  )
+                  val scanner = tableConnection.getScanner(scan)
+                  val results: Vector[(K,V)] = scanner.iterator.asScala.toVector.flatMap{ result =>
+                    val bytes = result.getValue(tilesCF, "")
+                    AvroEncoder.fromBinary(kwWriterSchema.value.getOrElse(_recordCodec.schema), bytes)(_recordCodec)
+                  }
+                  scanner.close()
+                  results
+                } else Vector.empty
+              val kvs: Vector[(K, V)] = mergeFunc match {
+                case Some(fn) =>
+                  (kvs2 ++ kvs1)
+                    .groupBy(_._1)
+                    .map({ case (k, kvs) =>
+                           val vs = kvs.map(_._2)
+                           val v: V = vs.tail.foldLeft(vs.head)(fn)
+                           (k, v)
+                         })
+                    .toVector
+                case None => kvs1
+              }
+              val bytes = AvroEncoder.toBinary(kvs)(codec)
               val put = new Put(HBaseKeyEncoder.encode(layerId, id))
               put.addColumn(tilesCF, "", System.currentTimeMillis(), bytes)
               mutator.mutate(put)
             }
 
+            tableConnection.close()
             mutator.flush()
             mutator.close()
           }

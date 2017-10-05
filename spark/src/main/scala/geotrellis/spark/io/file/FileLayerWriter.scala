@@ -16,15 +16,18 @@
 
 package geotrellis.spark.io.file
 
+import geotrellis.raster._
 import geotrellis.spark._
 import geotrellis.spark.io._
 import geotrellis.spark.io.avro._
 import geotrellis.spark.io.avro.codecs._
 import geotrellis.spark.io.index._
-import geotrellis.raster._
+import geotrellis.spark.merge._
 import geotrellis.util._
 
 import org.apache.spark.rdd.RDD
+import org.apache.spark.SparkContext
+
 import spray.json._
 
 import scala.reflect._
@@ -48,6 +51,57 @@ class FileLayerWriter(
     catalogPath: String
 ) extends LayerWriter[LayerId] with LazyLogging {
 
+  // Layer Updating
+  def overwrite[
+    K: AvroRecordCodec: Boundable: JsonFormat: ClassTag,
+    V: AvroRecordCodec: ClassTag,
+    M: JsonFormat: GetComponent[?, Bounds[K]]: Mergable
+  ](
+    id: LayerId,
+    rdd: RDD[(K, V)] with Metadata[M]
+  ): Unit = {
+    update(id, rdd, None)
+  }
+
+  def update[
+    K: AvroRecordCodec: Boundable: JsonFormat: ClassTag,
+    V: AvroRecordCodec: ClassTag,
+    M: JsonFormat: GetComponent[?, Bounds[K]]: Mergable
+  ](
+    id: LayerId,
+    rdd: RDD[(K, V)] with Metadata[M],
+      mergeFunc: (V, V) => V
+  ): Unit = {
+    update(id, rdd, Some(mergeFunc))
+  }
+
+  private def update[
+    K: AvroRecordCodec: Boundable: JsonFormat: ClassTag,
+    V: AvroRecordCodec: ClassTag,
+    M: JsonFormat: GetComponent[?, Bounds[K]]: Mergable
+  ](
+    id: LayerId,
+    rdd: RDD[(K, V)] with Metadata[M],
+    mergeFunc: Option[(V, V) => V]
+  ): Unit = {
+    validateUpdate[FileLayerHeader, K, V, M](id, rdd.metadata) match {
+      case Some(LayerAttributes(header, metadata, keyIndex, writerSchema)) =>
+        val path = header.path
+        val maxWidth = Index.digits(keyIndex.toIndex(keyIndex.keyBounds.maxKey))
+        val keyPath = KeyPathGenerator(catalogPath, path, keyIndex, maxWidth)
+        val layerPath = new File(catalogPath, path).getAbsolutePath
+
+        logger.info(s"Writing update for layer ${id} to $path")
+
+        attributeStore.writeLayerAttributes(id, header, metadata, keyIndex, writerSchema)
+        FileRDDWriter.update[K, V](rdd, layerPath, keyPath, Some(writerSchema), mergeFunc)
+        
+      case None =>
+        logger.warn(s"Skipping update with empty bounds for layer $id.")
+    }
+  }
+
+  // Layer Writing
   protected def _write[
     K: AvroRecordCodec: JsonFormat: ClassTag,
     V: AvroRecordCodec: ClassTag,

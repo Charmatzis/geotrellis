@@ -22,12 +22,15 @@ import geotrellis.spark.io._
 import geotrellis.spark.io.avro._
 import geotrellis.spark.io.avro.codecs._
 import geotrellis.spark.io.index.{KeyIndexMethod, KeyIndex}
+import geotrellis.spark.merge._
+import geotrellis.spark.util._
 import geotrellis.util._
 
 import org.apache.avro.Schema
 import org.apache.hadoop.fs.Path
-import org.apache.spark.SparkContext
 import org.apache.spark.rdd.RDD
+import org.apache.spark.SparkContext
+
 import spray.json._
 import spray.json.DefaultJsonProtocol._
 
@@ -37,8 +40,60 @@ class HadoopLayerWriter(
   rootPath: Path,
   val attributeStore: AttributeStore,
   indexInterval: Int = 4
-) extends LayerWriter[LayerId] {
+) extends LayerWriter[LayerId] with LazyLogging {
 
+  // Layer Updating
+  def overwrite[
+    K: AvroRecordCodec: Boundable: JsonFormat: ClassTag,
+    V: AvroRecordCodec: ClassTag,
+    M: JsonFormat: GetComponent[?, Bounds[K]]: Mergable
+  ](id: LayerId, rdd: RDD[(K, V)] with Metadata[M]): Unit = {
+    update(id, rdd, None)
+  }
+
+  def update[
+    K: AvroRecordCodec: Boundable: JsonFormat: ClassTag,
+    V: AvroRecordCodec: ClassTag,
+    M: JsonFormat: GetComponent[?, Bounds[K]]: Mergable
+  ](id: LayerId, rdd: RDD[(K, V)] with Metadata[M], mergeFunc: (V, V) => V): Unit = {
+    update(id, rdd, Some(mergeFunc))
+  }
+
+  private def update[
+    K: AvroRecordCodec: Boundable: JsonFormat: ClassTag,
+    V: AvroRecordCodec: ClassTag,
+    M: JsonFormat: GetComponent[?, Bounds[K]]: Mergable
+  ](
+    id: LayerId,
+    rdd: RDD[(K, V)] with Metadata[M],
+    mergeFunc: Option[(V, V) => V]
+  ): Unit = {
+    val layerPath =
+      try {
+        new Path(rootPath,  s"${id.name}/${id.zoom}")
+      } catch {
+        case e: Exception =>
+          throw new InvalidLayerIdError(id).initCause(e)
+      }
+
+    validateUpdate[HadoopLayerHeader, K, V, M](id, rdd.metadata) match {
+      case Some(LayerAttributes(header, metadata, keyIndex, writerSchema)) =>
+        val fn = mergeFunc match {
+          case Some(fn) => fn
+          case None => { (v1: V, v2: V) => v2 }
+        }
+
+        logger.info(s"Writing update for layer ${id} to ${header.path}")
+
+        attributeStore.writeLayerAttributes(id, header, metadata, keyIndex, writerSchema)
+        HadoopRDDWriter.update(rdd, layerPath, id, attributeStore, mergeFunc)
+
+      case None =>
+        logger.warn(s"Skipping update with empty bounds for layer $id.")
+    }
+  }
+
+  // Layer Writing
   protected def _write[
     K: AvroRecordCodec: JsonFormat: ClassTag,
     V: AvroRecordCodec: ClassTag,

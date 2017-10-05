@@ -32,18 +32,27 @@ import spray.json._
 import scala.reflect.ClassTag
 
 abstract class LayerUpdater[ID] {
+
   protected def _update[
     K: AvroRecordCodec: Boundable: JsonFormat: ClassTag,
     V: AvroRecordCodec: ClassTag,
     M: JsonFormat: GetComponent[?, Bounds[K]]: Mergable
   ](id: ID, rdd: RDD[(K, V)] with Metadata[M], keyBounds: KeyBounds[K], mergeFunc: (V, V) => V): Unit
 
+  def overwrite[
+    K: AvroRecordCodec: Boundable: JsonFormat: ClassTag,
+    V: AvroRecordCodec: ClassTag,
+    M: JsonFormat: GetComponent[?, Bounds[K]]: Mergable
+  ](id: ID, rdd: RDD[(K, V)] with Metadata[M]): Unit
+
+
   protected def schemaHasChanged[K: AvroRecordCodec, V: AvroRecordCodec](writerSchema: Schema): Boolean = {
     val codec  = KeyValueRecordCodec[K, V]
     val schema = codec.schema
-    !schema.fingerprintMatches(writerSchema)
+      !schema.fingerprintMatches(writerSchema)
   }
 
+  @deprecated("Use LayerWriter.update instead", "1.2")
   def update[
     K: AvroRecordCodec: Boundable: JsonFormat: ClassTag,
     V: AvroRecordCodec: ClassTag,
@@ -56,6 +65,7 @@ abstract class LayerUpdater[ID] {
         throw new EmptyBoundsError(s"Cannot update layer $id with a layer with empty bounds.")
     }
 
+  @deprecated("Use LayerWriter.overwrite instead", "1.2")
   def update[
     K: AvroRecordCodec: Boundable: JsonFormat: ClassTag,
     V: AvroRecordCodec: ClassTag,
@@ -63,7 +73,6 @@ abstract class LayerUpdater[ID] {
   ](id: ID, rdd: RDD[(K, V)] with Metadata[M]): Unit =
     rdd.metadata.getComponent[Bounds[K]] match {
       case keyBounds: KeyBounds[K] =>
-        // By default, we want the updating tile to replace the existing tile.
         val mergeFunc: (V, V) => V = { (existing, updating) => updating }
         _update(id, rdd, keyBounds, mergeFunc)
       case EmptyBounds =>

@@ -20,6 +20,8 @@ import geotrellis.raster.{GridBounds, Tile}
 import geotrellis.spark._
 import geotrellis.spark.io.avro.codecs._
 import geotrellis.spark.io.json._
+import geotrellis.spark.testkit.io._
+import geotrellis.spark.testkit.testfiles.TestFiles
 
 import java.time.{ZoneOffset, ZonedDateTime}
 
@@ -46,7 +48,7 @@ trait CoordinateSpaceTimeSpec { self: PersistenceSpec[SpaceTimeKey, Tile, TileLa
 
         val expected = {
           for {
-            (col, row) <- bounds1.coords ++ bounds2.coords
+            (col, row) <- bounds1.coordsIter.toSeq ++ bounds2.coordsIter.toSeq
             time <- dates
           } yield SpaceTimeKey(col, row, time)
         }
@@ -65,7 +67,7 @@ trait CoordinateSpaceTimeSpec { self: PersistenceSpec[SpaceTimeKey, Tile, TileLa
 
         val expected = {
           for {
-            (col, row) <- bounds1.coords ++ bounds2.coords
+            (col, row) <- bounds1.coordsIter.toSeq ++ bounds2.coordsIter.toSeq
             time <- dates diff Seq(dates(2))
           } yield {
             SpaceTimeKey(col, row, time)
@@ -86,7 +88,7 @@ trait CoordinateSpaceTimeSpec { self: PersistenceSpec[SpaceTimeKey, Tile, TileLa
 
         val expected = {
           for {
-            (col, row) <- bounds1.coords ++ bounds2.coords
+            (col, row) <- bounds1.coordsIter.toSeq ++ bounds2.coordsIter.toSeq
             time <- Seq(dates(0), dates(4))
           } yield {
             SpaceTimeKey(col, row, time)

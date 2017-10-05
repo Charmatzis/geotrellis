@@ -25,6 +25,7 @@ import geotrellis.spark.util.KryoWrapper
 
 import com.datastax.driver.core.querybuilder.QueryBuilder
 import com.datastax.driver.core.querybuilder.QueryBuilder.{eq => eqs}
+
 import org.apache.avro.Schema
 import org.apache.spark.SparkContext
 import org.apache.spark.rdd.RDD
@@ -34,7 +35,11 @@ import com.typesafe.config.ConfigFactory
 import scala.collection.JavaConversions._
 import scala.reflect.ClassTag
 
+
 object CassandraRDDReader {
+  final val DefaultThreadCount =
+    ConfigFactory.load().getThreads("geotrellis.cassandra.threads.rdd.read")
+
   def read[K: Boundable : AvroRecordCodec : ClassTag, V: AvroRecordCodec : ClassTag](
     instance: CassandraInstance,
     keyspace: String,
@@ -45,7 +50,7 @@ object CassandraRDDReader {
     filterIndexOnly: Boolean,
     writerSchema: Option[Schema] = None,
     numPartitions: Option[Int] = None,
-    threads: Int = ConfigFactory.load().getThreads("geotrellis.cassandra.threads.rdd.read")
+    threads: Int = DefaultThreadCount
   )(implicit sc: SparkContext): RDD[(K, V)] = {
     if (queryKeyBounds.isEmpty) return sc.emptyRDD[(K, V)]
 

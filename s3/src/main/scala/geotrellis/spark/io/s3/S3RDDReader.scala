@@ -26,16 +26,22 @@ import geotrellis.spark.util.KryoWrapper
 import scalaz.concurrent.{Strategy, Task}
 import scalaz.std.vector._
 import scalaz.stream.{Process, nondeterminism}
+
 import com.amazonaws.services.s3.model.AmazonS3Exception
+
 import org.apache.avro.Schema
 import org.apache.commons.io.IOUtils
 import org.apache.spark.SparkContext
 import org.apache.spark.rdd.RDD
 
 import com.typesafe.config.ConfigFactory
+
 import java.util.concurrent.Executors
 
+
 trait S3RDDReader {
+  final val DefaultThreadCount =
+    ConfigFactory.load().getThreads("geotrellis.s3.threads.rdd.read")
 
   def getS3Client: () => S3Client
 
@@ -50,7 +56,7 @@ trait S3RDDReader {
     filterIndexOnly: Boolean,
     writerSchema: Option[Schema] = None,
     numPartitions: Option[Int] = None,
-    threads: Int = ConfigFactory.load().getThreads("geotrellis.s3.threads.rdd.read")
+    threads: Int = DefaultThreadCount
   )(implicit sc: SparkContext): RDD[(K, V)] = {
     if (queryKeyBounds.isEmpty) return sc.emptyRDD[(K, V)]
 
