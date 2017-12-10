@@ -16,7 +16,9 @@
 
 package geotrellis.spark.io.cassandra
 
-import geotrellis.spark.LayerId
+import geotrellis.raster._
+import geotrellis.raster.resample._
+import geotrellis.spark.{LayerId, SpatialComponent}
 import geotrellis.spark.io._
 import geotrellis.spark.io.avro.codecs.KeyValueRecordCodec
 import geotrellis.spark.io.avro.{AvroEncoder, AvroRecordCodec}
@@ -28,10 +30,13 @@ import spray.json._
 import scala.collection.JavaConversions._
 import scala.reflect.ClassTag
 
+import java.math.BigInteger
+
+
 class CassandraValueReader(
   instance: CassandraInstance,
   val attributeStore: AttributeStore
-) extends ValueReader[LayerId] {
+) extends OverzoomingValueReader {
 
   def reader[K: AvroRecordCodec: JsonFormat: ClassTag, V: AvroRecordCodec](layerId: LayerId): Reader[K, V] = new Reader[K, V] {
     val header = attributeStore.readHeader[CassandraLayerHeader](layerId)
@@ -48,7 +53,7 @@ class CassandraValueReader(
           .and(eqs("zoom", layerId.zoom))
       )
 
-      val row = session.execute(statement.bind(keyIndex.toIndex(key).asInstanceOf[java.lang.Long])).all()
+      val row = session.execute(statement.bind(keyIndex.toIndex(key): BigInteger)).all()
       val tiles = row.map { entry =>
           AvroEncoder.fromBinary(writerSchema, entry.getBytes("value").array())(codec)
         }
@@ -75,6 +80,14 @@ object CassandraValueReader {
     layerId: LayerId
   ): Reader[K, V] =
     new CassandraValueReader(instance, attributeStore).reader[K, V](layerId)
+
+  def apply[K: AvroRecordCodec: JsonFormat: SpatialComponent: ClassTag, V <: CellGrid: AvroRecordCodec: ? => TileResampleMethods[V]](
+    instance: CassandraInstance,
+    attributeStore: AttributeStore,
+    layerId: LayerId,
+    resampleMethod: ResampleMethod
+  ): Reader[K, V] =
+    new CassandraValueReader(instance, attributeStore).overzoomingReader[K, V](layerId, resampleMethod)
 
   def apply(instance: CassandraInstance): CassandraValueReader =
     new CassandraValueReader(

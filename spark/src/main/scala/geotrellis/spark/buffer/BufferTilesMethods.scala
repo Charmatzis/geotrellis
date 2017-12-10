@@ -17,8 +17,8 @@
 package geotrellis.spark.buffer
 
 import geotrellis.raster._
-import geotrellis.raster.stitch._
 import geotrellis.raster.crop._
+import geotrellis.raster.stitch._
 import geotrellis.spark._
 import geotrellis.util.MethodExtensions
 
@@ -36,6 +36,7 @@ class BufferTilesMethods[
   def bufferTiles(bufferSize: Int, layerBounds: GridBounds): RDD[(K, BufferedTile[V])] =
     BufferTiles(self, bufferSize, layerBounds)
 
+  @deprecated("Please specify buffer sizes per key as a function K => BufferSizes", "1.2")
   def bufferTiles(bufferSizesPerKey: RDD[(K, BufferSizes)]): RDD[(K, BufferedTile[V])] =
     BufferTiles(self, bufferSizesPerKey)
 

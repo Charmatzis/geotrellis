@@ -36,6 +36,22 @@ import org.apache.spark.util.AccumulatorV2
 import scala.collection.mutable
 import scala.reflect.ClassTag
 
+/**
+  * @param x:           x-coordinate (in the units used by the layer)
+  * @param y:           y-coordinate (in the units used by the layer)
+  * @param viewHeight:  view height (in units of "meters") if positive then height above the surface, if negative then absolute height
+  * @param angle:       the angle in radians (about the z-axis) of the "camera"
+  * @param fieldOfView: the field of view of the "camera" in radians
+  * @param altitude:    the absolute altitude to query; if -∞ then use the terrain height
+  */
+case class Viewpoint(
+  x: Double,
+  y: Double,
+  viewHeight: Double,
+  angle: Double,
+  fieldOfView: Double,
+  altitude: Double
+)
 
 /**
   * A Spark-enabled implementation of R2 [1] viewshed.
@@ -49,25 +65,8 @@ import scala.reflect.ClassTag
   */
 object IterativeViewshed {
 
-  /**
-    * x:           x-coordinate (in the units used by the layer)
-    * y:           y-coordinate (in the units used by the layer)
-    * viewHeight:  view height (in units of "meters") if positive then height above the surface, if negative then absolute height
-    * angle:       the angle in radians (about the z-axis) of the "camera"
-    * fieldOfView: the field of view of the "camera" in radians
-    * altitude:    the absolute altitude to query; if -∞ then use the terrain height
-    */
-  case class Point6D(
-    x: Double,
-    y: Double,
-    viewHeight: Double,
-    angle: Double,
-    fieldOfView: Double,
-    altitude: Double
-  )
-
-  implicit def coordinatesToPoints(points: Seq[jts.Coordinate]): Seq[Point6D] =
-    points.map({ p => Point6D(p.x, p.y, p.z, 0, -1.0, Double.NegativeInfinity) })
+  implicit def coordinatesToPoints(points: Seq[jts.Coordinate]): Seq[Viewpoint] =
+    points.map({ p => Viewpoint(p.x, p.y, p.z, 0, -1.0, Double.NegativeInfinity) })
 
   private val logger = Logger.getLogger(IterativeViewshed.getClass)
 
@@ -157,7 +156,7 @@ object IterativeViewshed {
     */
   private def pointInfo[K: (? => SpatialKey), V: (? => Tile)](
     rdd: RDD[(K, V)] with Metadata[TileLayerMetadata[K]])(
-    pi: (Point6D, Int)
+    pi: (Viewpoint, Int)
   )= {
     val (p, index) = pi
     val md = rdd.metadata
@@ -203,7 +202,7 @@ object IterativeViewshed {
     */
   def apply[K: (? => SpatialKey): ClassTag, V: (? => Tile)](
     elevation: RDD[(K, V)] with Metadata[TileLayerMetadata[K]],
-    ps: Seq[Point6D],
+    ps: Seq[Viewpoint],
     maxDistance: Double,
     curvature: Boolean = true,
     operator: AggregationOperator = Or,

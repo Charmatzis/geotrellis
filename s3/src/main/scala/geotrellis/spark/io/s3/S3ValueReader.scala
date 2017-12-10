@@ -16,6 +16,8 @@
 
 package geotrellis.spark.io.s3
 
+import geotrellis.raster._
+import geotrellis.raster.resample._
 import geotrellis.spark._
 import geotrellis.spark.io._
 import geotrellis.spark.io.avro._
@@ -32,9 +34,9 @@ import scala.reflect.ClassTag
 
 class S3ValueReader(
   val attributeStore: AttributeStore
-) extends ValueReader[LayerId] {
+) extends OverzoomingValueReader {
 
-  val s3Client: S3Client = S3Client.DEFAULT
+  def s3Client: S3Client = S3Client.DEFAULT
 
   def reader[K: AvroRecordCodec: JsonFormat: ClassTag, V: AvroRecordCodec](layerId: LayerId): Reader[K, V] = new Reader[K, V] {
     val header = attributeStore.readHeader[S3LayerHeader](layerId)
@@ -71,6 +73,13 @@ object S3ValueReader {
     layerId: LayerId
   ): Reader[K, V] =
     new S3ValueReader(attributeStore).reader[K, V](layerId)
+
+  def apply[K: AvroRecordCodec: JsonFormat: SpatialComponent: ClassTag, V <: CellGrid: AvroRecordCodec: ? => TileResampleMethods[V]](
+    attributeStore: AttributeStore,
+    layerId: LayerId,
+    resampleMethod: ResampleMethod
+  ): Reader[K, V] =
+    new S3ValueReader(attributeStore).overzoomingReader[K, V](layerId, resampleMethod)
 
   def apply(bucket: String, root: String): S3ValueReader =
     new S3ValueReader(new S3AttributeStore(bucket, root))

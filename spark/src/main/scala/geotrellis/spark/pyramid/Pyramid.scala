@@ -23,6 +23,7 @@ import geotrellis.raster.merge._
 import geotrellis.raster.resample._
 import geotrellis.raster.prototype._
 import geotrellis.util._
+import geotrellis.vector.Extent
 
 import org.apache.spark.Partitioner
 import org.apache.spark.rdd._
@@ -41,6 +42,20 @@ object Pyramid extends LazyLogging {
     implicit def methodToOptions(m: ResampleMethod): Options = Options(resampleMethod = m)
   }
 
+  /** Resample base layer to generate the next level "up" in the pyramid.
+    *
+    * When building the next pyramid level each tile is resampled individually, without sampling pixels from neighboring tiles.
+    * In the common case of [[ZoomedLayoutScheme]], used when building a power of two pyramid, this means that
+    * each resampled pixel is going to be equidistant to four pixels in the base layer.
+    *
+    * @param rdd           the base layer to be resampled
+    * @param layoutScheme  the scheme used to generate next pyramid level
+    * @param zoom          the pyramid or zoom level of base layer
+    * @param options       the options for the pyramid process
+    * @tparam K            RDD key type (ex: SpatialKey)
+    * @tparam V            RDD value type (ex: Tile or MultibandTile)
+    * @tparam M            Metadata associated with the RDD[(K,V)]
+    */
   def up[
     K: SpatialComponent: ClassTag,
     V <: CellGrid: ClassTag: ? => TileMergeMethods[V]: ? => TilePrototypeMethods[V],
@@ -95,20 +110,25 @@ object Pyramid extends LazyLogging {
     val nextRdd = {
      val transformedRdd = rdd
         .map { case (key, tile) =>
-          val extent = sourceLayout.mapTransform(key)
+          val extent: Extent = key.getComponent[SpatialKey].extent(sourceLayout)
           val newSpatialKey = nextLayout.mapTransform(extent.center)
-          (key.setComponent(newSpatialKey), (key, tile))
+          // Resample the tile on the map side of the pyramid step.
+          // This helps with shuffle size.
+          val resampled = tile.prototype(nextLayout.tileLayout.tileCols, nextLayout.tileLayout.tileRows)
+          resampled.merge(extent, extent, tile, resampleMethod)
+
+          (key.setComponent(newSpatialKey), (key, resampled))
         }
 
         partitioner
           .fold(transformedRdd.combineByKey(createTiles, mergeTiles1, mergeTiles2))(transformedRdd.combineByKey(createTiles _, mergeTiles1 _, mergeTiles2 _, _))
           .mapPartitions ( partition => partition.map { case (newKey: K, seq: Seq[(K, V)]) =>
-            val newExtent = nextLayout.mapTransform(newKey)
+            val newExtent = newKey.getComponent[SpatialKey].extent(nextLayout)
             val newTile = seq.head._2.prototype(nextLayout.tileLayout.tileCols, nextLayout.tileLayout.tileRows)
 
             for ((oldKey, tile) <- seq) {
-              val oldExtent = sourceLayout.mapTransform(oldKey)
-              newTile.merge(newExtent, oldExtent, tile, resampleMethod)
+              val oldExtent = oldKey.getComponent[SpatialKey].extent(sourceLayout)
+              newTile.merge(newExtent, oldExtent, tile, NearestNeighbor)
             }
             (newKey, newTile: V)
           },  preservesPartitioning = true)
@@ -127,6 +147,25 @@ object Pyramid extends LazyLogging {
   ): (Int, RDD[(K, V)] with Metadata[M]) =
     up(rdd, layoutScheme, zoom, Options.DEFAULT)
 
+  /** Produce all pyramid levels from start and end zoom.
+    *
+    * The first entry in the result stream is the tuple of `rdd` and `startZoom`.
+    * The RDDs of pyramid levels have a recursive dependency on their base RDD.
+    * Because RDDs are lazy take care when consuming this stream.
+    * Choose to either persist the base layer or trigger jobs
+    * in order to maximize the caching provided by the Spark BlockManager.
+    *
+    * @param rdd           the base layer to be resampled
+    * @param layoutScheme  the scheme used to generate next pyramid level
+    * @param startZoom     the pyramid or zoom level of base layer
+    * @param endZoom       the pyramid or zoom level to stop pyramid process
+    * @param options       the options for the pyramid process
+    * @tparam K            RDD key type (ex: SpatialKey)
+    * @tparam V            RDD value type (ex: Tile or MultibandTile)
+    * @tparam M            Metadata associated with the RDD[(K,V)]
+    *
+    * @see [up]
+    */
   def levelStream[
     K: SpatialComponent: ClassTag,
     V <: CellGrid: ClassTag: ? => TileMergeMethods[V]: ? => TilePrototypeMethods[V],

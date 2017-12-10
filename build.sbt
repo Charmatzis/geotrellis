@@ -34,8 +34,15 @@ lazy val commonSettings = Seq(
       // Publish snapshots to LocationTech
       Some("LocationTech Snapshot Repository" at s"${locationtech}/geotrellis-snapshots")
     } else {
-      // Publish releases to Sonatype
-      Some("Sonatype Release Repository" at s"${sonatype}service/local/staging/deploy/maven2")
+      val milestoneRx = """-(M|RC)\d+$""".r
+      milestoneRx.findFirstIn(Version.geotrellis) match {
+        case Some(v) =>
+          // Public milestones to LocationTech
+          Some("LocationTech Release Repository" at s"${locationtech}/geotrellis-releases")
+        case None =>
+          // Publish releases to Sonatype
+          Some("Sonatype Release Repository" at s"${sonatype}service/local/staging/deploy/maven2")
+      }
     }
   },
 
@@ -151,7 +158,7 @@ lazy val slick = project
   .settings(commonSettings)
 
 lazy val spark = project
-  .dependsOn(util, raster, `raster-testkit` % "test")
+  .dependsOn(util, raster, `raster-testkit` % "test", `vector-testkit` % "test")
   .settings(commonSettings)
   .settings(
     // This takes care of a pseudo-cyclic dependency between the `spark` test scope, `spark-testkit`,

@@ -59,6 +59,6 @@ case class PreparedGeometry[G <: Geometry](val geom: Geometry) {
 
 /** Companion object to [[PreparedGeometry]] */
 object PreparedGeometry {
-  private val factory = new PreparedGeometryFactory 
+  private val factory = new PreparedGeometryFactory
 }
 

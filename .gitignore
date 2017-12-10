@@ -34,6 +34,10 @@ _SUCCESS
 *.sublime-*
 .vagrant
 
+.terraform
+scripts/emr/terraform/variables.tf*
+scripts/emr/terraform/terraform.tfstate*
+
 lib
 index.html
 index.js
@@ -42,3 +46,6 @@ index.js
 nohup.out
 
 site/
+
+derby.log
+metastore_db/

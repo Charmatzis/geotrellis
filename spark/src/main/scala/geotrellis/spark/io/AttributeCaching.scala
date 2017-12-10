@@ -24,37 +24,48 @@ import com.typesafe.config.ConfigFactory
 
 import scala.concurrent.duration._
 
+object AttributeCaching {
+  private val config = ConfigFactory.load()
+  val expiration: Int = config.getInt("geotrellis.attribute.caching.expirationMinutes")
+  val maxSize: Int = config.getInt("geotrellis.attribute.caching.maxSize")
+  val enabled: Boolean = config.getBoolean("geotrellis.attribute.caching.enabled")
+}
 
 trait AttributeCaching { self: AttributeStore =>
-  private val expiration = ConfigFactory.load().getInt("geotrellis.attribute.caching.expirationMinutes")
-  private val maxSize = ConfigFactory.load().getInt("geotrellis.attribute.caching.maxSize")
+  import AttributeCaching._
 
-  private val cache =
+  private final val cache = {
     Scaffeine()
       .recordStats()
       .expireAfterWrite(expiration.minutes)
       .maximumSize(maxSize)
       .build[(LayerId, String), Any]
+  }
 
   def cacheRead[T: JsonFormat](layerId: LayerId, attributeName: String): T = {
-    cache.get(layerId -> attributeName, { key => read[T](layerId, attributeName) }).asInstanceOf[T]
+    if(enabled)
+      cache.get(layerId -> attributeName, { _ => read[T](layerId, attributeName) }).asInstanceOf[T]
+    else
+      read[T](layerId, attributeName)
   }
 
   def cacheWrite[T: JsonFormat](layerId: LayerId, attributeName: String, value: T): Unit = {
-    cache.put(layerId -> attributeName, value)
+    if(enabled) cache.put(layerId -> attributeName, value)
     write[T](layerId, attributeName, value)
   }
 
   def clearCache(): Unit = {
-    cache.invalidateAll()
+    if(enabled) cache.invalidateAll()
   }
 
   def clearCache(id: LayerId): Unit = {
-    val toInvalidate = cache.asMap.keys.filter(_._1 == id)
-    cache.invalidateAll(toInvalidate)
+    if(enabled) {
+      val toInvalidate = cache.asMap.keys.filter(_._1 == id)
+      cache.invalidateAll(toInvalidate)
+    }
   }
 
   def clearCache(id: LayerId, attribute: String): Unit = {
-    cache.invalidate(id -> attribute)
+    if(enabled) cache.invalidate(id -> attribute)
   }
 }

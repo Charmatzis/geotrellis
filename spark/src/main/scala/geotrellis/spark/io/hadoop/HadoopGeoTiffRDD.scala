@@ -19,25 +19,29 @@ package geotrellis.spark.io.hadoop
 import geotrellis.proj4._
 import geotrellis.raster._
 import geotrellis.raster.io.geotiff._
+import geotrellis.raster.io.geotiff.reader.GeoTiffReader
 import geotrellis.raster.io.geotiff.tags.TiffTags
 import geotrellis.spark._
-import geotrellis.spark.io.RasterReader
 import geotrellis.spark.io.hadoop.formats._
-import geotrellis.util.StreamingByteReader
-import geotrellis.vector.ProjectedExtent
+import geotrellis.spark.io.hadoop._
+import geotrellis.spark.io.RasterReader
+import geotrellis.util.{LazyLogging, StreamingByteReader}
+import geotrellis.vector._
 
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.Path
+
 import org.apache.spark.SparkContext
 import org.apache.spark.rdd.RDD
 
 import java.net.URI
 import java.nio.ByteBuffer
 
+
 /**
   * Allows for reading of whole or windowed GeoTiff as RDD[(K, V)]s through Hadoop FileSystem API.
   */
-object HadoopGeoTiffRDD {
+object HadoopGeoTiffRDD extends LazyLogging {
   final val GEOTIFF_TIME_TAG_DEFAULT = "TIFFTAG_DATETIME"
   final val GEOTIFF_TIME_FORMAT_DEFAULT = "yyyy:MM:dd HH:mm:ss"
 
@@ -50,9 +54,19 @@ object HadoopGeoTiffRDD {
     * @param timeFormat    Pattern for [[java.time.format.DateTimeFormatter]] to parse timeTag.
     * @param maxTileSize   Maximum allowed size of each tiles in output RDD.
     *                      May result in a one input GeoTiff being split amongst multiple records if it exceeds this size.
-    *                      If no maximum tile size is specific, then each file file is read fully.
+    *                      If no maximum tile size is specific, then each file is broken into 256x256 tiles.
+    *                      If [[None]], then the whole file will be read in.
+    *                      This option is incompatible with numPartitions and anything set to that parameter will be ignored.
     * @param numPartitions How many partitions Spark should create when it repartitions the data.
-    * @param chunkSize     How many bytes should be read in at a time.
+    * @param partitionBytes Desired partition size in bytes, at least one item per partition will be assigned.
+    *                       If no size is specified, then partitions 128 Mb in size will be created by default.
+    *                       This option is incompatible with the numPartitions option. If both are set and maxTileSize isn't,
+    *                       then partitionBytes will be ignored in favor of numPartitions. However, if maxTileSize is set,
+    *                       then partitionBytes will be retained.
+    *                       If [[None]] and maxTileSize is defined, then the default partitionBytes' value will still be used.
+    *                       If maxTileSize is also [[None]], then partitionBytes will remain [[None]] as well.
+    * @param chunkSize     How many bytes should be read in at a time when reading a file.
+    *                      If [[None]], then 65536 byte chunks will be read in at a time.
     */
 
   case class Options(
@@ -60,10 +74,14 @@ object HadoopGeoTiffRDD {
     crs: Option[CRS] = None,
     timeTag: String = GEOTIFF_TIME_TAG_DEFAULT,
     timeFormat: String = GEOTIFF_TIME_FORMAT_DEFAULT,
-    maxTileSize: Option[Int] = None,
+    maxTileSize: Option[Int] = Some(DefaultMaxTileSize),
     numPartitions: Option[Int] = None,
+    partitionBytes: Option[Long] = Some(DefaultPartitionBytes),
     chunkSize: Option[Int] = None
   ) extends RasterReader.Options
+
+  private val DefaultMaxTileSize = 256
+  private val DefaultPartitionBytes = 128l * 1024 * 1024
 
   object Options {
     def DEFAULT = Options()
@@ -83,26 +101,45 @@ object HadoopGeoTiffRDD {
   /**
     * Creates a RDD[(K, V)] whose K and V depends on the type of the GeoTiff that is going to be read in.
     *
-    * @param path     Hdfs GeoTiff path.
-    * @param uriToKey function to transform input key basing on the URI information.
-    * @param options  An instance of [[Options]] that contains any user defined or default settings.
+    * This function has two modes of operation:
+    * When options.maxTileSize is set windows will be read from GeoTiffs and their
+    * size and count will be balanced among partitions using partitionBytes option.
+    * Resulting partitions will be grouped in relation to GeoTiff segment layout.
+    *
+    * When maxTileSize is None the GeoTiffs will be read fully and balanced among
+    * partitions using either numPartitions or partitionBytes option.
+    *
+    * @param  path      HDFS GeoTiff path.
+    * @param  uriToKey  Function to transform input key basing on the URI information.
+    * @param  options   An instance of [[Options]] that contains any user defined or default settings.
+    * @param  geometry  An optional geometry to filter by.  If this is provided, it is assumed that all GeoTiffs are in the same CRS, and that this geometry is in that CRS.
     */
-  def apply[I, K, V](path: Path, uriToKey: (URI, I) => K, options: Options)(implicit sc: SparkContext, rr: RasterReader[Options, (I, V)]): RDD[(K, V)] = {
-    val conf = configuration(path, options)
-    options.maxTileSize match {
-      case Some(tileSize) =>
-        val pathsAndDimensions: RDD[(Path, (Int, Int))] =
-          sc.newAPIHadoopRDD(
-            conf,
-            classOf[TiffTagsInputFormat],
-            classOf[Path],
-            classOf[TiffTags]
-          ).mapValues { tiffTags => (tiffTags.cols, tiffTags.rows) }
+  def apply[I, K, V](
+    path: Path,
+    uriToKey: (URI, I) => K,
+    options: Options,
+    geometry: Option[Geometry] = None
+  )(implicit sc: SparkContext, rr: RasterReader[Options, (I, V)]): RDD[(K, V)] = {
 
-        apply[I, K, V](pathsAndDimensions, uriToKey, options)
+    val conf = new SerializableConfiguration(configuration(path, options))
+    val pathString = path.toString // The given path as a String instead of a Path
+
+    options.maxTileSize match {
+      case Some(maxTileSize) =>
+        if (options.numPartitions.isDefined) logger.warn("numPartitions option is ignored")
+        val infoReader = HadoopGeoTiffInfoReader(pathString, conf, options.tiffExtensions)
+
+        infoReader.readWindows(
+          infoReader.geoTiffInfoRdd.map(new URI(_)),
+          uriToKey,
+          maxTileSize,
+          options.partitionBytes.getOrElse(DefaultPartitionBytes),
+          options,
+          geometry)
+
       case None =>
         sc.newAPIHadoopRDD(
-          conf,
+          conf.value,
           classOf[BytesFileInputFormat],
           classOf[Path],
           classOf[Array[Byte]]
@@ -129,38 +166,27 @@ object HadoopGeoTiffRDD {
     * Creates a RDD[(K, V)] whose K and V depends on the type of the GeoTiff that is going to be read in.
     *
     * @param pathsToDimensions  RDD keyed by GeoTiff path with (cols, rows) tuple as value.
-    * @param uriToKey function to transform input key basing on the URI information.
+    * @param uriToKey           A function to transform input key basing on the URI information.
     * @param options            An instance of [[Options]] that contains any user defined or default settings.
     */
-  def apply[I, K, V](pathsToDimensions: RDD[(Path, (Int, Int))], uriToKey: (URI, I) => K, options: Options)
-                    (implicit rr: RasterReader[Options, (I, V)]): RDD[(K, V)] = {
+  def apply[I, K, V](
+    pathsToDimensions: RDD[(Path, (Int, Int))],
+    uriToKey: (URI, I) => K,
+    options: Options
+  )(implicit rr: RasterReader[Options, (I, V)]): RDD[(K, V)] = {
+    if (options.numPartitions.isDefined) logger.warn("numPartitions option is ignored")
+    if (options.maxTileSize.isEmpty) logger.info(s"Using default maxTileSize=$DefaultMaxTileSize")
 
+    implicit val sc = pathsToDimensions.sparkContext
     val conf = new SerializableConfiguration(pathsToDimensions.sparkContext.hadoopConfiguration)
-
-    val windows: RDD[(Path, GridBounds)] =
-      pathsToDimensions
-        .flatMap { case (objectRequest, (cols, rows)) =>
-          RasterReader.listWindows(cols, rows, options.maxTileSize).map((objectRequest, _))
-        }
-
-    // Windowed reading may have produced unbalanced partitions due to files of differing size
-    val repartitioned =
-      options.numPartitions match {
-        case Some(p) => windows.repartition(p)
-        case None => windows
-      }
-
-    repartitioned.map { case (path: Path, pixelWindow: GridBounds) =>
-      val reader = options.chunkSize match {
-        case Some(chunkSize) =>
-          StreamingByteReader(HdfsRangeReader(path, conf.value), chunkSize)
-        case None =>
-          StreamingByteReader(HdfsRangeReader(path, conf.value))
-      }
-
-      val (k, v) = rr.readWindow(reader, pixelWindow, options)
-      uriToKey(path.toUri, k) -> v
-    }
+    val infoReader = HadoopGeoTiffInfoReader(null, conf, options.tiffExtensions)
+    infoReader.readWindows(
+      pathsToDimensions.map({ case (path, _) => path.toUri}),
+      uriToKey,
+      options.maxTileSize.getOrElse(DefaultMaxTileSize),
+      options.partitionBytes.getOrElse(DefaultPartitionBytes),
+      options,
+      None)
   }
 
   /**

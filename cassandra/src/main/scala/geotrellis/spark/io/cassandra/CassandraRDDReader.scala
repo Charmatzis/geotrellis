@@ -35,6 +35,7 @@ import com.typesafe.config.ConfigFactory
 import scala.collection.JavaConversions._
 import scala.reflect.ClassTag
 
+import java.math.BigInteger
 
 object CassandraRDDReader {
   final val DefaultThreadCount =
@@ -46,7 +47,7 @@ object CassandraRDDReader {
     table: String,
     layerId: LayerId,
     queryKeyBounds: Seq[KeyBounds[K]],
-    decomposeBounds: KeyBounds[K] => Seq[(Long, Long)],
+    decomposeBounds: KeyBounds[K] => Seq[(BigInt, BigInt)],
     filterIndexOnly: Boolean,
     writerSchema: Option[Schema] = None,
     numPartitions: Option[Int] = None,
@@ -73,13 +74,13 @@ object CassandraRDDReader {
       .toString
 
     sc.parallelize(bins, bins.size)
-      .mapPartitions { partition: Iterator[Seq[(Long, Long)]] =>
+      .mapPartitions { partition: Iterator[Seq[(BigInt, BigInt)]] =>
         instance.withSession { session =>
           val statement = session.prepare(query)
 
           val result = partition map { seq =>
-            LayerReader.njoin[K, V](seq.iterator, threads) { index: Long =>
-              val row = session.execute(statement.bind(index.asInstanceOf[java.lang.Long]))
+            LayerReader.njoin[K, V](seq.iterator, threads) { index: BigInt =>
+              val row = session.execute(statement.bind(index: BigInteger))
               if (row.nonEmpty) {
                 val bytes = row.one().getBytes("value").array()
                 val recs = AvroEncoder.fromBinary(kwWriterSchema.value.getOrElse(_recordCodec.schema), bytes)(_recordCodec)

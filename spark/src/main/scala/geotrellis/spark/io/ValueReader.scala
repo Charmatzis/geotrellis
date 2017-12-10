@@ -16,6 +16,8 @@
 
 package geotrellis.spark.io
 
+import geotrellis.raster._
+import geotrellis.raster.resample._
 import geotrellis.spark._
 import geotrellis.spark.io.avro._
 import geotrellis.spark.io.json._
@@ -32,6 +34,11 @@ trait ValueReader[ID] {
 
   /** Produce a key value reader for a specific layer, prefetching layer metadata once at construction time */
   def reader[K: AvroRecordCodec: JsonFormat: ClassTag, V: AvroRecordCodec](layerId: ID): Reader[K, V]
+
+  def overzoomingReader[
+    K: AvroRecordCodec: JsonFormat: SpatialComponent: ClassTag, 
+    V <: CellGrid: AvroRecordCodec: ? => TileResampleMethods[V]
+  ](layerId: ID, resampleMethod: ResampleMethod = ResampleMethod.DEFAULT): Reader[K, V]
 }
 
 object ValueReader {

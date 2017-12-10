@@ -16,9 +16,12 @@
 
 package geotrellis.raster.io.geotiff
 
-import geotrellis.raster.GridBounds
-import geotrellis.raster.TileLayout
-import scala.collection.mutable.ArrayBuffer
+import geotrellis.raster.{GridBounds, RasterExtent, TileLayout, PixelIsArea}
+import geotrellis.raster.rasterize.Rasterizer
+import geotrellis.vector.{Extent, Geometry}
+import scala.collection.mutable
+import spire.syntax.cfor._
+
 
 /**
  * This case class represents how the segments in a given [[GeoTiff]] are arranged.
@@ -122,13 +125,158 @@ case class GeoTiffSegmentLayout(totalCols: Int, totalRows: Int, tileLayout: Tile
   def intersectingSegments(bounds: GridBounds): Array[Int] = {
     val tc = tileLayout.tileCols
     val tr = tileLayout.tileRows
-    val ab = ArrayBuffer[Int]()
+    val ab = mutable.ArrayBuffer[Int]()
     for (layoutCol <- (bounds.colMin / tc) to (bounds.colMax / tc)) {
       for (layoutRow <- (bounds.rowMin / tr) to (bounds.rowMax / tr)) {
         ab += (layoutRow * tileLayout.layoutCols) + layoutCol
       }
     }
     ab.toArray
+  }
+
+  /** Partition a list of pixel windows to localize required segment reads.
+    * Some segments may be required by more than one partition.
+    * Pixel windows outside of layout range will be filtered.
+    * Maximum partition size may be exceeded if any window size exceeds it.
+    * Windows will not be split to satisfy partition size limits.
+    *
+    * @param windows List of pixel windows from this layout
+    * @param maxPartitionSize Maximum pixel count for each partition
+    */
+  def partitionWindowsBySegments(
+    windows: Seq[GridBounds],
+    maxPartitionSize: Long
+  ): Array[Array[GridBounds]] = {
+    val partition = mutable.ArrayBuilder.make[GridBounds]
+    partition.sizeHintBounded(128, windows)
+    var partitionSize: Long = 0l
+    var partitionCount: Long = 0l
+    val partitions = mutable.ArrayBuilder.make[Array[GridBounds]]
+
+    def finalizePartition() {
+      val res = partition.result
+      if (res.nonEmpty) partitions += res
+      partition.clear()
+      partitionSize = 0l
+      partitionCount = 0l
+    }
+
+    def addToPartition(window: GridBounds) {
+      partition += window
+      partitionSize += window.sizeLong
+      partitionCount += 1
+    }
+
+    val sourceBounds = GridBounds(0, 0, totalCols - 1, totalRows - 1)
+
+    // Because GeoTiff segment indecies are enumorated in row-major order
+    // sorting windows by the min index also provides spatial order
+    val sorted = windows
+      .filter(sourceBounds.intersects(_))
+      .map { window =>
+        window -> getSegmentIndex(col = window.colMin, row = window.rowMin)
+      }.sortBy(_._2)
+
+    for ((window, _) <- sorted) {
+      if ((partitionCount == 0) || (partitionSize + window.sizeLong) < maxPartitionSize) {
+        addToPartition(window)
+      } else {
+        finalizePartition()
+        addToPartition(window)
+      }
+    }
+
+    finalizePartition()
+    partitions.result
+  }
+
+  private def bestWindowSize(maxSize: Int, segment: Int): Int = {
+    var i: Int = 1
+    var result: Int = -1
+    // Search for the largest factor of segment that is > 1 and <=
+    // maxSize.  If one cannot be found, give up and return maxSize.
+    while (i < math.sqrt(segment) && result == -1) {
+      if ((segment % i == 0) && ((segment/i) <= maxSize)) result = (segment/i)
+      i += 1
+    }
+    if (result == -1) maxSize; else result
+  }
+
+  def listWindows(maxSize: Int): Array[GridBounds] = {
+    val segCols = tileLayout.tileCols
+    val segRows = tileLayout.tileRows
+
+    val colSize: Int =
+      if (maxSize >= segCols * 2) {
+        math.floor(maxSize.toDouble / segCols).toInt * segCols
+      } else if (maxSize >= segCols) {
+        segCols
+      } else bestWindowSize(maxSize, segCols)
+
+    val rowSize: Int =
+      if (maxSize >= segRows * 2) {
+        math.floor(maxSize.toDouble / segRows).toInt * segRows
+      } else if (maxSize >= segRows) {
+        segRows
+      } else bestWindowSize(maxSize, segRows)
+
+    val windows = listWindows(colSize, rowSize)
+
+    windows
+  }
+
+   /** List all pixel windows that meet the given geometry */
+  def listWindows(maxSize: Int, extent: Extent, geometry: Geometry): Array[GridBounds] = {
+    val segCols = tileLayout.tileCols
+    val segRows = tileLayout.tileRows
+
+    val maxColSize: Int =
+      if (maxSize >= segCols * 2) {
+        math.floor(maxSize.toDouble / segCols).toInt * segCols
+      } else if (maxSize >= segCols) {
+        segCols
+      } else bestWindowSize(maxSize, segCols)
+
+    val maxRowSize: Int =
+      if (maxSize >= segRows) {
+        math.floor(maxSize.toDouble / segRows).toInt * segRows
+      } else if (maxSize >= segRows) {
+        segRows
+      } else bestWindowSize(maxSize, segRows)
+
+    val result = scala.collection.mutable.Set.empty[GridBounds]
+    val re = RasterExtent(extent, math.max(totalCols/maxColSize,1), math.max(totalRows/maxRowSize,1))
+    val options = Rasterizer.Options(includePartial=true, sampleType=PixelIsArea)
+
+    Rasterizer.foreachCellByGeometry(geometry, re, options)({ (col: Int, row: Int) =>
+      result +=
+      GridBounds(
+        col * maxColSize,
+        row * maxRowSize,
+        math.min((col+1)*maxColSize - 1, totalCols-1),
+        math.min((row+1)*maxRowSize - 1, totalRows-1)
+      )
+    })
+    result.toArray
+  }
+
+  /** List all pixel windows that cover a grid of given size */
+  def listWindows(cols: Int, rows: Int): Array[GridBounds] = {
+    val result = scala.collection.mutable.ArrayBuilder.make[GridBounds]
+    result.sizeHint((totalCols / cols) * (totalRows / rows))
+
+    cfor(0)(_ < totalCols, _ + cols) { col =>
+      cfor(0)(_ < totalRows, _ + rows) { row =>
+        result +=
+        GridBounds(
+          col,
+          row,
+          math.min(col + cols - 1, totalCols - 1),
+          math.min(row + rows - 1, totalRows - 1)
+        )
+      }
+    }
+    result.result
   }
 }
 

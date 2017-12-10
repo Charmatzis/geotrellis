@@ -16,7 +16,9 @@
 
 package geotrellis.spark.io.accumulo
 
-import geotrellis.spark.LayerId
+import geotrellis.raster._
+import geotrellis.raster.resample._
+import geotrellis.spark.{LayerId, SpatialComponent}
 import geotrellis.spark.io._
 import geotrellis.spark.io.avro.{AvroEncoder, AvroRecordCodec}
 import geotrellis.spark.io.avro.codecs.KeyValueRecordCodec
@@ -35,9 +37,9 @@ import scala.reflect.ClassTag
 class AccumuloValueReader(
   instance: AccumuloInstance,
   val attributeStore: AttributeStore
-) extends ValueReader[LayerId] {
+) extends OverzoomingValueReader {
 
-  val rowId = (index: Long) => new Text(AccumuloKeyEncoder.long2Bytes(index))
+  val rowId = (index: BigInt) => new Text(AccumuloKeyEncoder.long2Bytes(index))
 
   def reader[K: AvroRecordCodec: JsonFormat: ClassTag, V: AvroRecordCodec](layerId: LayerId): Reader[K, V] = new Reader[K, V] {
     val header = attributeStore.readHeader[AccumuloLayerHeader](layerId)
@@ -77,6 +79,14 @@ object AccumuloValueReader {
     layerId: LayerId
   ): Reader[K, V] =
     new AccumuloValueReader(instance, attributeStore).reader[K, V](layerId)
+
+  def apply[K: AvroRecordCodec: JsonFormat: SpatialComponent: ClassTag, V <: CellGrid: AvroRecordCodec: ? => TileResampleMethods[V]](
+    instance: AccumuloInstance,
+    attributeStore: AttributeStore,
+    layerId: LayerId,
+    resampleMethod: ResampleMethod
+  ): Reader[K, V] =
+    new AccumuloValueReader(instance, attributeStore).overzoomingReader[K, V](layerId, resampleMethod)
 
   def apply(instance: AccumuloInstance): AccumuloValueReader =
     new AccumuloValueReader(

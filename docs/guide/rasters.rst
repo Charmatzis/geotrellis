@@ -4,8 +4,8 @@ Using Rasters
 This document serves as a complete guide to using ``Raster``\ s in
 GeoTrellis.
 
-Raster Rendering
-================
+Rendering
+=========
 
 Rendering Common Image Formats
 ------------------------------
@@ -30,7 +30,7 @@ integers in it are all *actually* hex codes for RGBA colors. In this
 case, your task is nearly complete. The following code should be
 sufficient:
 
-.. code:: scala
+.. code-block:: scala
 
     import geotrellis.raster._
 
@@ -203,7 +203,7 @@ Custom Color Ramps
 You can create your own color ramp with a list of integar values,
 constructed using our RBG or RGBA helper objects.
 
-.. code:: scala
+.. code-block:: scala
 
     val colorRamp =
       ColorRamp(
@@ -225,7 +225,7 @@ stops that interpolates colors between red and blue, with an alpha value
 that starts at totally opaque for the red values, and ends at 0xAA alpha
 for blue values:
 
-.. code:: scala
+.. code-block:: scala
 
     val colorRamp =
           ColorRamp(0xFF0000FF, 0x0000FFFF)
@@ -262,7 +262,7 @@ programming interface, just be sure to keep the distinction in mind.
 
 You can create RGB and RGBA colors in a variety of ways:
 
-.. code:: scala
+.. code-block:: scala
 
     import geotrellis.raster.render._
 
@@ -292,7 +292,7 @@ the color of any value that doesn't fit to the color map. Also, if the
 will throw an exception if a value does not fit the color map. The
 default values of these options are:
 
-.. code:: scala
+.. code-block:: scala
 
     val colorMapDefaultOptions =
       ColorMap.Options(
@@ -305,7 +305,7 @@ default values of these options are:
 To examplify the options, let's look at how two different color ramps
 will color values.
 
-.. code:: scala
+.. code-block:: scala
 
     import geotrellis.render._
 
@@ -353,7 +353,7 @@ will color values.
 If we were to use the ``mapDouble`` method of the color maps to find
 color values of the following points, we'd see the following:
 
-.. code:: scala
+.. code-block:: scala
 
     scala> colorMap1.mapDouble(2.0) == RGB(0, 255, 0)
     res1: Boolean = true
@@ -367,7 +367,7 @@ is based on the ``GreaterThanOrEqualTo`` class boundary type, and
 ``2.0`` is not greater than or equal to any of the mapped values, it
 maps ``2.0`` to the ``fallbackColor``.
 
-.. code:: scala
+.. code-block:: scala
 
     scala> colorMap1.mapDouble(23.5) == RGB(255,153,51)
     res4: Boolean = true
@@ -396,7 +396,7 @@ Here is an example of creating a ``ColorMap`` from a ``ColorRamp`` and a
 number of stops to 10, and convert it to a color map based on quantile
 breaks:
 
-.. code:: scala
+.. code-block:: scala
 
     val tile: Tile = ???
 
@@ -405,7 +405,7 @@ breaks:
 Here is another way to do the same thing, using the
 ``ColorRamp.toColorMap``:
 
-.. code:: scala
+.. code-block:: scala
 
     val tile: Tile = ???
 
@@ -442,6 +442,126 @@ from 0 to 1.0) and whether or not Huffman tables are to be computed on
 each run - often referred to as 'optimized' rendering. By default, a
 compressionQuality of 0.7 is used and Huffman table optimization is not
 used.
+
+Reprojecting
+============
+
+Overview
+--------
+
+Many core GeoTrellis data types can be reprojected. To reproject a ``Line``:
+
+.. code-block:: scala
+
+    val wm: Line = ...
+
+    val ll: Line = wm.reproject(WebMercator, LatLng)  /* The Line reprojected into LatLng */
+
+To reproject a ``Tile``:
+
+.. code-block:: scala
+
+   val wm: Tile = ...
+   val extent: Extent = ....  /* Area covered by the Tile */
+   val raster: Raster[Tile] = Raster(wm, extent)  /* A Raster is a "location-aware" Tile */
+
+   val ll: Raster[Tile] = raster.reproject(WebMercator, LatLng)
+
+To reproject an ``Extent``:
+
+.. code-block:: scala
+
+   val wm: Extent = ...
+
+   val ll: Extent = wm.reproject(WebMercator, LatLng)
+
+See the pattern?
+
+A GeoTrellis "layer" (some ``RDD[(K, V)]``) conceptually represents a single, giant piece
+of imagery. In this form however it finds itself cut up into individual ``V`` (usually ``Tile``)
+and indexed by ``K`` (usually ``SpatialKey``). Is such a giant, cut-up raster still reprojectable?
+Certainly:
+
+.. code-block:: scala
+
+   // Recall this common alias:
+   //   type TileLayerRDD[K] = RDD[(K, Tile)] with Metadata[TileLayerMetadata[K]]
+   val wm: TileLayerRDD[SpatialKey] = ...  /* Result of previous work */
+   val layout: LayoutDefinition = ...      /* Size/shape of your new grid */
+
+   val (zoom, ll): (Int, TileLayerRDD[SpatialKey]) = wm.reproject(LatLng, layout)
+
+Let's break down the last line some more:
+
+::
+
+   val (zoom, ll): (Int, TileLayerRDD[SpatialKey]) = wm.reproject(LatLng, layout)
+        [1]                                                       [2]     [3]
+
+- [1]: When a ``ZoomedLayoutScheme`` was given instead of a ``LayoutDefinition``, this ``zoom``
+  value is the nearest zoom level that the layer was reprojected to. Otherwise, this value
+  is ``0``.
+- [2]: We only need to provide the target ``CRS`` here, since a ``TileLayerRDD``
+  implicitely knows its own projection.
+- [3]: Providing a ``LayoutDefinition`` allows us to define the shape of the grid
+  that results from the reproject. As an overload, this method can accept a
+  ``LayoutScheme`` instead.
+
+You may also have a different formulation if your data source is a giant GeoTiff
+on S3, and not a pre-ingested GeoTrellis layer. In that case, you'd have:
+
+.. code-block:: scala
+
+   /* Extract Tiles efficiently from a remote GeoTiff */
+   val wm: RDD[(ProjectedExtent, Tile)] = S3GeoTiffRDD.spatial("s3-bucket-name", "your-image.tiff")
+
+   val ll: RDD[(ProjectedExtent, Tile)] = wm.reproject(LatLng)
+
+``.reproject`` here doesn't need a source ``CRS``, since this information is
+encoded in each ``ProjectedExtent``.
+
+On Layer Reprojection
+---------------------
+
+It's important to note that the resulting RDDs in this last example and the one previous to it are
+different. The latter is not keyed, and so doesn't necessarily represent some
+original, unified raster. It is not a "layer" in the usual GeoTrellis sense,
+and the projection is done per-Tile. With ``TileLayerRDD``, the Tiles were
+automatically given buffer pixels during reprojection in order to avoid
+artifacts (i.e. seams, dead pixels, etc.).
+
+Futhermore, we can expect the reprojected Tiles in the ``RDD[(ProjectedExtent, Tile)]`` to
+be skewed:
+
+.. figure:: ./images/reproject.png
+
+where the border regions of each ``Tile`` are almost certainly patches
+of ``NODATA``. This is undesirable but also fixable,
+thanks to ``.tileToLayout``:
+
+.. code-block:: scala
+
+   val wm: RDD[(ProjectedExtent, Tile)] = S3GeoTiffRDD.spatial("s3-bucket-name", "your-image.tiff")
+
+   val ll: RDD[(ProjectedExtent, Tile)] = wm.reproject(LatLng)
+
+   /* The value type held within the tiles. Example: `IntCellType` */
+   val ct: CellType = ???
+
+   /* The size and shape of your desired grid. */
+   val layout: LayoutDefinition = ???
+
+   /* Reorganize your reprojected Tiles into a true grid. */
+   val layer: RDD[(SpatialKey, Tile)] = ll.tileToLayout(ct, layout)
+
+``.tileToLayout`` works by recutting each source ``Tile`` into potentially
+many target tiles, associating each with a ``SpatialKey``, and merging any
+that have matching keys. This merging is what clears out our ``NODATA``.
+
+And now we've returned to a nice keyed Layer! Due to fewer
+Spark shuffles, this method technically has better
+performance than when we had a ``TileLayerRDD`` to begin with. However,
+you will not be freed from potential seams or other image artifacts.
 
 Resampling
 ==========
@@ -565,7 +685,7 @@ For a code example, this is how we would do exactly what we talked
 about: color a raster tile into red, green and blue values based on it's
 quantile breaks:
 
-.. code:: scala
+.. code-block:: scala
 
     import geotrellis.raster.histogram._
     import geotrellis.raster.render._
@@ -604,7 +724,7 @@ Kriging Methods
 The Kriging methods are largely classified into different types in the
 way the mean(mu) and the covariance values of the object are dealt with.
 
-.. code:: scala
+.. code-block:: scala
 
     // Array of sample points with given data
     val points: Array[PointFeature[Double]] = ...
@@ -624,7 +744,7 @@ namely:
 Simple Kriging
 ^^^^^^^^^^^^^^
 
-.. code:: scala
+.. code-block:: scala
 
     // Simple kriging, a tile  set with the Kriging prediction per cell is returned
     val sv: Semivariogram = NonLinearSemivariogram(points, 30000, 0, Spherical)
@@ -654,7 +774,7 @@ interpolation set is constant (using solely the sample points)
 Ordinary Kriging
 ^^^^^^^^^^^^^^^^
 
-.. code:: scala
+.. code-block:: scala
 
     // Ordinary kriging, a tile  set with the Kriging prediction per cell is returned
     val sv: Semivariogram = NonLinearSemivariogram(points, 30000, 0, Spherical)
@@ -683,7 +803,7 @@ model.
 Universal Kriging
 ^^^^^^^^^^^^^^^^^
 
-.. code:: scala
+.. code-block:: scala
 
     // Universal kriging, a tile  set with the Kriging prediction per cell is returned
     val attrFunc: (Double, Double) => Array[Double] = {
@@ -728,7 +848,7 @@ Here, the "linear" refers to the linearity in parameters (beta).
 Geostatistical Kriging
 ^^^^^^^^^^^^^^^^^^^^^^
 
-.. code:: scala
+.. code-block:: scala
 
     // Geostatistical kriging, a tile  set with the Kriging prediction per cell is returned
     val attrFunc: (Double, Double) => Array[Double] = {
@@ -792,7 +912,7 @@ that the user may use any method for generating the set of attribute
 functions; in this case we have used coordinate transformation before
 the actual calculation).
 
-.. code:: scala
+.. code-block:: scala
 
     val c1: Double = 0.01 * (0.873 * (x - 418) - 0.488 * (y - 458))
     val c2: Double = 0.01 * (0.488 * (x - 418) + 0.873 * (y - 458))
@@ -808,7 +928,7 @@ Image taken from
 Elevation
 ^^^^^^^^^
 
-.. code:: scala
+.. code-block:: scala
 
     /** Estimate of the elevation's contribution to groundwater level
       * [10 * exp(-c1)]
@@ -826,7 +946,7 @@ Industry draw down (water usage of industry)
 Image taken from
 ``Smith, T.E., (2014) Notebook on Spatial Data Analysis [online]  http://www.seas.upenn.edu/~ese502/#notebook``
 
-.. code:: scala
+.. code-block:: scala
 
     /** Estimate of the industries' contribution to groundwater level
       * exp{ -1.0 * [(1.5)*c1^2 - c2^2]}
@@ -844,7 +964,7 @@ Island draw down (water usage of Venice)
 Image taken from
 ``Smith, T.E., (2014) Notebook on Spatial Data Analysis [online]  http://www.seas.upenn.edu/~ese502/#notebook``
 
-.. code:: scala
+.. code-block:: scala
 
     /** Estimate of the island's contribution to groundwater level
       * //exp{-1.0 * (sqrt((s1-560)^2 + (s2-390)^2) / 35)^8 }
@@ -864,7 +984,7 @@ In case the intuition for a relevant ``attrFunc`` is not clear; the user
 need not supply an ``attrFunc``, by default the following attribute
 Function is used :
 
-.. code:: scala
+.. code-block:: scala
 
     // For a Point(x, y), the set of default attributes is :
     Array(x, y, x * x, x * y, y * y)

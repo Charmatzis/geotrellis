@@ -19,7 +19,6 @@ package geotrellis.spark.viewshed
 import geotrellis.raster.{Tile, DoubleArrayTile}
 import geotrellis.raster.viewshed.R2Viewshed._
 import geotrellis.spark._
-import geotrellis.spark.viewshed.IterativeViewshed.Point6D
 import geotrellis.util.MethodExtensions
 
 import org.apache.spark.rdd.RDD
@@ -33,7 +32,7 @@ abstract class RDDViewshedMethods[K: (? => SpatialKey): ClassTag, V: (? => Tile)
     extends MethodExtensions[RDD[(K, V)] with Metadata[TileLayerMetadata[K]]] {
 
   def viewshed(
-    points: Seq[Point6D],
+    points: Seq[Viewpoint],
     maxDistance: Double = Double.PositiveInfinity,
     curvature: Boolean = true,
     operator: AggregationOperator = Or

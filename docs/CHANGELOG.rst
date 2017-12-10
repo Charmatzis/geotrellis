@@ -1,21 +1,412 @@
 Changelog
 =========
 
-1.2.0
+2.0.0
 -----
 
 API Changes
 ^^^^^^^^^^^
 
-- ``raster``:
+- ``geotrellis.spark``
 
-  - ``GridBounds.size`` deprecated in favour of ``GridBounds.sizeLong``
-  - ``GridBounds.coords`` deprecated in favour of ``GridBounds.coordsIter``
+  - **Change:**  The length of the key (the space-filling curve index or address) used for layer reading and writing has
+    been extended from a fixed length of 8 bytes to an arbitrary length.  This change affects not only the
+    ``geotrellis.spark`` package, but all backends (excluding ``geotrellis.geowave`` and ``geotrellis.geomesa``).
 
-- ``vectortile`` (experimental):
+1.2.0
+-----
+*2017 Nov 6*
 
-  - Library simplified by assuming the codec backend will always be Protobuf
-  - ``VectorTile.toGeoJson`` and ``VectorTile.toIterable`` added
+This release cycle saw a regular contributor `Simeon Fitch <https://github.com/metasim>`__
+elevated to official *Committer* status within GeoTrellis.
+
+The team would like to thank him, along with our newest contributors `Aaron Santos <https://github.com/aaron-santos>`__,
+`Austin Heyne <https://github.com/aheyne>`__, `Christos Charmatzis <https://github.com/Charmatzis>`__,
+`Jessica Austin <https://github.com/jessicaaustin>`__, and `@mteldridge <https://github.com/mteldridge>`__
+for helping make this release possible.
+
+API Changes
+^^^^^^^^^^^
+
+- ``geotrellis.raster``
+
+  - **Deprecation:** ``GridBounds.size`` in favor of ``GridBounds.sizeLong``.
+  - **Deprecation:** ``GridBounds.coords`` in favor of ``GridBounds.coordsIter``.
+  - **New:** ``GridBounds.offset`` and ``GridBounds.buffer`` for creating a
+    modified ``GridBounds`` from an existing one.
+  - **New:** ``ColorRamps.greyscale: Int => ColorRamp``, which will generate
+    a ramp when given some number of stops.
+  - **New:** ``ConstantTile.fromBytes`` to create any type of ``ConstantTile``
+    from an ``Array[Byte]``.
+  - **New:** ``Tile.rotate90: Int => Tile``, ``Tile.flipVertical: Tile`` and
+    ``Tile.flipHorizontal: Tile``.
+
+- ``geotrellis.vector``
+
+  - **New:** ``Geometry.isEmpty: Boolean``. This incurs much less overhead than
+    previous ways of determining emptiness.
+  - **New:** ``Line.head`` and ``Line.last`` for **efficiently** grabbing the first or
+    last ``Point`` in the ``Line``.
+
+- ``geotrellis.spark``
+
+  - **Deprecation:** The ``LayerUpdater`` trait hierarchy. Use ``LayerWriter.update`` or
+    ``LayerWriter.overwrite`` instead.
+  - **Deprecation:** Every cache provided by ``geotrellis.spark.util.cache``.
+    These will be removed in favor of a pluggable cache in 2.0.
+  - **New:** ``SpatialKey.extent: LayoutDefinition => Extent``
+  - **New:** ``ValueReader.attributeStore: AttributeStore``
+  - **New:** ``TileLayerRDD.toSpatialReduce: ((V, V) => V) => TileLayerRDD[SpatialKey]`` for smarter
+    folding of 3D tile layers into 2D tile layers.
+  - The often-used ``apply`` method overloads in ``MapKeyTransform`` have been given
+    more descriptive aliases.
+
+- ``geotrellis.vectortile`` (experimental)
+
+  - **New:** ``VectorTile.toGeoJson`` and ``VectorTile.toIterable``.
+  - Library simplified by assuming the codec backend will always be Protobuf.
+
+New Features
+^^^^^^^^^^^^
+
+Rasterizing ``Geometry`` Layers
+*******************************
+
+Finally, the full marriage of the ``vector``, ``raster``, and ``spark`` packages!
+You can now transform an ``RDD[Geometry]`` into a writable GeoTrellis layer of
+``(SpatialKey, Tile)``!
+
+.. code-block:: scala
+
+   val geoms: RDD[Geometry] = ...
+   val celltype: CellType = ...
+   val layout: LayoutDefinition = ...
+   val value: Double = ...  /* Value to fill the intersecting pixels with */
+
+   val layer: RDD[(SpatialKey, Tile)] with Metadata[LayoutDefinition] =
+     geoms.rasterize(value, celltype, layout)
+
+Clipping ``Geometry`` Layers to a Grid
+**************************************
+
+In a similar vein to the above, you can now transform an arbitrarily large
+collection of Geometries into a proper GeoTrellis layer, where the sections
+of each Geometry are clipped to fit inside their enclosing Extents.
+
+.. figure:: img/cliptogrid.png
+
+Here we can see a large ``Line`` being clipped into nine sublines. It's
+one method call:
+
+.. code-block:: scala
+
+   import geotrellis.spark._
+
+   val layout: LayoutDefinition = ...  /* The definition of your grid */
+   val geoms: RDD[Geometry] = ...      /* Result of some previous work */
+
+   /* There are likely many clipped Geometries per SpatialKey... */
+   val layer: RDD[(SpatialKey, Geometry)] = geoms.clipToGrid(layout)
+
+   /* ... so we can group them! */
+   val grouped: RDD[(SpatialKey, Iterable[Geometry])] = layer.groupByKey
+
+If clipping on the Extent boundaries is not what you want, there are ways
+to customize this. See `the ClipToGrid entry in our Scaladocs <https://geotrellis.github.io/scaladocs/latest/#geotrellis.spark.clip.ClipToGrid$>`__.
+
+Sparkified Viewshed
+*******************
+
+A `Viewshed <https://en.wikipedia.org/wiki/Viewshed>`__ shows "visibility" from some
+set vantage point, given an Elevation raster. Prior to GeoTrellis 1.2 this was possible
+at the individual ``Tile`` level but not the Layer (``RDD``) level. Now it is.
+
+First, we need to think about the ``Viewpoint`` type:
+
+.. code-block:: scala
+
+   import geotrellis.spark.viewshed._
+
+   val point: Viewpoint(
+     x = ...,                    // some coordinate.
+     y = ...,                    // some coordinate.
+     viewHeight = 4000,          // 4 kilometres above the surface.
+     angle = Math.PI / 2,        // direction that the "camera" faces (in radians). 0 == east.
+     fieldOfView = Math.PI / 2,  // angular width of the "view port".
+     altitude = 0                // the height of points you're interested in seeing.
+   )
+
+In other words:
+
+- x, y, viewHeight: where are we?
+- angle: what direction are we looking?
+- fieldOfView: how wide are we looking?
+- altitude: how high/low is the "target" of our viewing?
+
+Given a ``Seq[Viewpoint]`` (the algorithm supports multiple simultaneous view points),
+we can do:
+
+.. code-block:: scala
+
+   // Recall this common alias:
+   //   type TileLayerRDD[K] = RDD[(K, Tile)] with Metadata[TileLayerMetadata[K]]
+
+   val layer: TileLayerRDD[SpatialKey] = ...  /* Result of previous work */
+
+   val viewshed: TileLayerRDD[SpatialKey] = layer.viewshed(Seq(point))
+
+Sparkified Euclidean Distance
+*****************************
+
+We use *Euclidean Distance* to render a collection of points into a heatmap of
+proximities of some area. Say, of two roads crossing:
+
+.. figure:: img/euclid.png
+
+Prior to GeoTrellis 1.2, this was possible at the individual ``Tile`` level
+but not the Layer (``RDD``) level. Now it is.
+
+.. code-block:: scala
+
+   /* Result of previous work. Potentially millions of points per SpatialKey. */
+   val points: RDD[(SpatialKey, Array[Coordinate])] = ...
+   val layout: LayoutDefinition = ...  /* The definition of your grid */
+
+   val layer: RDD[(SpatialKey, Tile)] = points.euclideanDistance(layout)
+
+Polygonal Summaries over Time
+*****************************
+
+The following was possible prior to GeoTrellis 1.2:
+
+.. code-block:: scala
+
+   val layer: TileLayerRDD[SpatialKey] = ...
+   val polygon: Polgyon = ...
+
+   /* The maximum value within some Polygon overlaid on a Tile layer */
+   val summary: Double = layer.polygonalMaxDouble(polygon)
+
+The above is also now possible for layers keyed by ``SpaceTimeKey`` to form
+a "time series":
+
+.. code-block:: scala
+
+   val layer: TileLayerRDD[SpaceTimeKey] = ...
+   val polygon: MultiPolygon = ...
+
+   /* The maximum value within some Polygonal area at each time slice */
+   val summary: Map[ZonedDateTime, Double] = layer.maxSeries(polygon)
+
+Overzooming ``ValueReader``
+***************************
+
+A GeoTrellis ``ValueReader`` connects to some layer catalog and lets you read
+individual values (usually Tiles):
+
+.. code-block:: scala
+
+   import geotrellis.spark.io.s3._
+
+   val store: AttributeStore = ...
+   val reader: Reader[SpatialKey, Tile] = S3ValueReader(store).reader(LayerId("my-catalog", 10))
+
+   val tile: Tile = reader.read(SpatialKey(10, 10))
+
+However ``.reader`` is limited to zoom levels that actually exist for the given layer.
+Now you can use ``.overzoomingReader`` to go as deep as you like:
+
+.. code-block:: scala
+
+   import geotrellis.raster.resample._
+
+   val reader: Reader[SpatialKey, Tile] =
+     S3ValueReader(store).overzoomingReader(LayerId("my-catalog", 20), Average)
+
+   val tile: Tile = reader.read(SpatialKey(1000, 1000))
+
+Regridding a Tile Layer
+***********************
+
+Have you ever wanted to "redraw" a grid over an established GeoTrellis layer?
+Say, this 16-tile Layer into a 4-tile one, both of 1024x1024 total pixels:
+
+.. figure:: img/regrid.png
+
+Prior to GeoTrellis 1.2, there was no official way to do this. Now you can use
+``.regrid``:
+
+.. code-block:: scala
+
+   /* The result of some previous work. Say each Tile is 256x256. */
+   val layer: TileLayerRDD[SpatialKey] = ...
+
+   /* "Recut" the tiles so that each one is now 512x512.
+    * No pixels are gained or lost, save some NODATA on the bottom
+    * and right edges that may appear for padding purposes.
+    */
+   val regridded: TileLayerRDD[SpatialKey] = layer.regrid(512)
+
+You can also regrid to non-rectangular sizes:
+
+.. code-block:: scala
+
+   val regridded: TileLayerRDD[SpatialKey] = layer.regrid(tileCols = 100, tileRows = 300)
+
+Robust Layer Querying
+**********************
+
+It's common to find a subset of Tiles in a layer that are touched by some given
+``Polygon``:
+
+.. code-block:: scala
+
+   val poly: Polygon = ???
+
+   val rdd: TileLayerRDD[SpatialKey] =
+    layerReader
+       .query[SpatialKey, Tile, TileLayerMetadata[SpatialKey]](Layer("name", zoom))
+       .where(Intersects(poly))
+       .result
+
+Now you can perform this same operation with ``Line``, ``MultiLine``, and even
+``(Polygon, CRS)`` to ensure that your Layer and Geometry always exist in the
+same projection.
+
+Improved ``Tile`` ASCII Art
+***************************
+
+Sometimes you just want to visualize a ``Tile`` without going
+through the song-and-dance of rendering it to a ``.png``. The existing
+``Tile.asciiDraw`` method *kind of* does that, except its output is all
+in numbers.
+
+The new ``Tile.renderAscii: Palette => String`` method fulfills your heart's desire:
+
+.. code-block:: scala
+
+   import geotrellis.raster._
+   import geotrellis.raster.io.geotiff._
+   import geotrellis.raster.render.ascii._
+
+   val tile: Tile = SinglebandGeoTiff("path/to/tiff.tiff").tile
+
+   // println(tile.renderAscii())  // the default
+   println(tile.renderAscii(AsciiArtEncoder.Palette.STIPLED))
+
+::
+
+            ▚▖
+            ▚▚▜▚▚
+            ▚▖▚▜▚▖▚▚
+           ▜▚▚▚▜▚█▚▜▚█▚
+           █▚▜▖▜▖▚▚█▚▚▜▚█▖
+           ▚▚█▚▜▚▚▚▚▚▚▚▜▚▚▚▚▚
+          ▚▚▖▚▚▚▚▚█▜▚▚▜▚▚▖▚▖▚▖▚
+          ▚▚▚▚█▚▚▚▚▚██▚▚▚▜▖▖██▚▚▜▚
+          ▚▚█▚▚▚▚▚▚▚▜▚▚▚▚▚▚▜▚█▚▚▚▚▚▚▚
+         █▚▚▖▚█▚▜▚▚▚▚▖▚▚▚▚▚▚▚▚▚▚▜▚▚▚▚▚▚▖
+         █▚▚▚▜▚▖▚▚▚▚▚▚▚▚▚▚▚▚▚▚▚▚▚██▖▜▚█▚▚▚
+         █▚▚██▚▚▚▚▚▚▚▚▖▚▚▚▚▚▚▚▚█▚▚▚▚▚▚▖▖▖▚▚▚▚
+        █▜▚▚██▜▚▚▚▜▖▚▚▜▚█▜▚▚▚▜▚▖▚▜▚█▚▚▖▚▚▖▚▚▖▖▚▚
+        ▚▚█▚▚▚█▚██▚▚▚▚▚▚▚▚▜▚▚█▜▚▖█▚▚▚▜▚▚▚▚▚▚▜▚█▚█
+        █▚▜▚▜▚█▚▜▚▚▜▚█▚▚▚▚▚▚▚▚▚▚▚▖▚▖▚▚▖▚█▚█▚▚▚▖█▚
+        ████▚███▚▚▚▚██▚▚▚█▜▚▚▖▚▚▚▖▖▚▚▚▚▚▚▚▚█▚▜▖█
+       ▖█▜▚█▚██▜▖▜▜█▜▜█▜▚▚▚▚▚█▖▚▚▚▚█▚▚▚▚▚▚▜▚▚█▖▜
+       ▚▖██▚▜▚█▚▚▜▜█▜▜▜██▚▚▚▚█▚▚▚▜▖▚▚█▚▖▚▜▚▚▚▖▚█
+       █▚▚▚▚▜▚██▖██▜▚▚█▚▚▖▚▚▜▚▖▚▖▚▚▚▚▚▖▚▚▖▖▖▚▖▚
+      ▚▚▚█▚▚▚▚▚█▜▚▚████▚█▚▚▚█▚▖▚▚▚▖▚▚█▚▚▖▚▚▚▖▖▖
+      ▚▚▚█▚▚▚▖▖▚▜█▜██▜██▚▚▖██▜▚▜▚█▚▚▚▚▚▚▚▚▖▖▜██
+      ▚▚▚▚▜█▚▚▚▚▚█████▚▜██▚██▚▚▚▚▜▚▖▚█▚▚▖▚▖▚▚█
+     ▚▚▜▚▚▚▚▜▚▜▚▚▚▚▜▚█▚▜█▚██▚██▚▚▚▚▖▚▚▚▚▖▖▚▚▖█
+     ▚▜▚▜▚▚▚▚▚▚█▚▚▚▚▚██▜▜▜███▖▚▚▜█▚▚▖▚█▚▚█▚▖▚
+     ▚▜▚▚▚▚▚▚▚▚▚▚▜▜▜▚▚▖▚▖▚▚▜▜██▜▚██▚▚▚▚▚▚▖▜█▚
+    ▚▚▖▚▚█▚█▚▚▚█▚▖▚▚▚█▚▚▚▚▚▜██▚█▜▚█▚▜▚▚███▜█▜
+    ▚▚▚▜▚▚▚▚▚▚▚▚▚▚▚▖█▚█▚▚▜█▜█▜█▜▚▖▚▚▚██▜▜█▚▜
+    ▚▚▚▚▜▚▚▚▚▚▚▜▚▚▚▚▚▚▖▚█▜▖▖█▚▖▜▖▚▖█▚▖█▚▚▜▚█
+    ▚▚█▚▚█▚▚▜▚▚▚▚▜▚▚▚▚▚▜▚▖▚█▜█▚▜▜▚█▖▜███▜▚▚
+   ▚▚▚▚▚▚▖▜▚█▚▚▚▖▚▚▚▚▚▚▚▚▚▚▚▜█▖▜▜▜█▚▚▚▖▚█▚█
+   ▜▚▚▚█▚▖▚█▚█▚▚█▚▚▚▚▚▚▚▖▚▚▚▜▚▚▚▜▚▖▚▖▚▚▚▚▜▚
+   ▚▚▚▚▖▚█▖█▜▚▚▚▚▚▚▚▚▖▚▚▖▖█▚▜▚▖▚▚▚▚▖▖▚█▚▚▚
+  ▚▚▚▚▚▚▚▚▚█▚▚▚▖▚▚▚█▚▜▚█▚▚▖▜██▚▖▚▚▚▚▚▚▚▚▚▖
+  ▚▚▚▚▚▚▚▖▚▚██▚▚▚▚▚▚▚▚▜▚▚█▚██▚▚▚▚▖▚▚▖▚▚█▜▖
+  ▚▚▚▚▚▚▚▚▚▚▚▚▚█▚▜▚▚▚▜▚▚▖▚▚▚▚▚▜▚▚▚▚▖▚▚▚▚▚
+ ▚██▖▚▚▚▚▚▚▚▚▜▚▚█▚▚▚▚▜▚▚▚▚█▜▖▚▚█▜▜█▜█▚▖▚▖
+ ▚▚▚▖▚▚█▚▚▜███▚▚▚▜▚▚▚▚▚█▚▖▖█▖▚████▜███▚██
+ ▚█▚▚▚▚██▜▚▜▚▜▜▜█▜▚█▚▜▖▜▚▚▚█▚▜█▚▜▚▚▚▚▚▖▖
+    █▜█▚▚▜▚▜▚▜▜▜▚▚▚▚██▖▖▖▚██▖█▚▜▜▚▚▚▚▚▚▖
+       ▚█▜▜▜▜▜██▚▜▚▚▚▚▚▚▖▜▚▜▚▚▚▜▚█▚▚▖▖▖
+          ██▚▚▚▚▚▚▚▜▚▜▖▚██▜▜▚▖▚▚█▚▚▚▖▜▜
+             ▜▚▚▖▚▚▚▖▚▜▜██▜▜▚█▚▚▜▚▚▜██▚
+                ▚▚█▚▜▚▚█▖▜▚▚▚▖█▚▚█▚▚█▚
+                   █▜▜▚▚▜▜▚▚▚▜█▚▚▚▜█▜█
+                      ▚▚▖▚█▖▚▖▜▚▖▚▖▜▚
+                         ███▖██▚▖▚▚▚▚
+                            ▜▚▚█▚▚▖▖█
+                              ▚▖▜█▜▚
+                                 ▖█▚
+
+Gorgious.
+
+Storage on Azure via HDFS
+*************************
+
+By adding some additional configuration, you can now use our
+`HDFS Layer Backend <guide/tile-backends.html#hdfs>`__ to read and write GeoTrellis
+layers to Microsoft Azure's blob storage.
+
+S3 Configurability
+******************
+
+`It's now possible to customize how our S3 backend communicates with S3.
+<guide/examples.html#work-with-s3-using-a-custom-s3client-configuration>`__
+
+Configuring JTS Precision
+*************************
+
+GeoTrellis uses the `Java Topology Suite <https://github.com/locationtech/jts>`__
+for its vector processing. By default, JTS uses a "floating"
+`PrecisionModel <https://locationtech.github.io/jts/javadoc/org/locationtech/jts/geom/PrecisionModel.html>`__.
+When writing code that needs to be numerically robust, this default can lead to Topology Exceptions.
+
+You can now use `Typesafe Config <https://github.com/lightbend/config>`__ to configure this
+to your application's needs. `See here for the specifics. <guide/vectors.html#numerical-precision-and-topology-exceptions>`__
+
+Other New Features
+******************
+
+- `Polygonal Summaries for MultibandTiles <https://github.com/locationtech/geotrellis/pull/2374>`__
+- `Filter GeoTiffRDDs by Geometry <https://github.com/locationtech/geotrellis/pull/2409>`__
+- `Can create ValueReaders via URIs through LayerProvides classes <https://github.com/locationtech/geotrellis/pull/2286>`__
+- `Can read/write GeoTiffs with Sinusoidal projections <https://github.com/locationtech/geotrellis/pull/2345>`__
+- `Can Resample via Sum operation <https://github.com/locationtech/geotrellis/pull/2326>`__
+
+Fixes
+^^^^^
+
+- `Negative grid bounds bug <https://github.com/locationtech/geotrellis/pull/2364>`__
+- `getSignedByteArray BugFix - fixes certain read problems <https://github.com/locationtech/geotrellis/pull/2270>`__
+- `Allow Merge Queue To Handle Larger Inputs <https://github.com/locationtech/geotrellis/pull/2400>`__
+- `Generate Windows That Conform To GeoTiff Segments <https://github.com/locationtech/geotrellis/pull/2402>`__
+- `Removed inefficient LayerFilter check <https://github.com/locationtech/geotrellis/pull/2324>`__
+- `Fixed issue with S3 URI not having a key prefix <https://github.com/locationtech/geotrellis/pull/2316>`__
+- `Improve S3 makePath function <https://github.com/locationtech/geotrellis/pull/2352>`__
+- `Fix S3GeoTiffRDD behavior with some options. <https://github.com/locationtech/geotrellis/pull/2317>`__
+- `Allow Contains(Point) query for temporal rdds <https://github.com/locationtech/geotrellis/pull/2297>`__
+- `Haversine formula fix <https://github.com/locationtech/geotrellis/pull/2408>`__
+- `Use Scaffeine instead of LRU cache in HadoopValueReader <https://github.com/locationtech/geotrellis/pull/2421>`__
+- `Fix GeoTiffInfo serialization issues <https://github.com/locationtech/geotrellis/pull/2312>`__
+- `Estimate partitions number based on GeoTiff segments <https://github.com/locationtech/geotrellis/pull/2296>`__
+- `Estimate partitions number basing on a desired partition size <https://github.com/locationtech/geotrellis/pull/2289>`__
+- `Pyramid operation preserves partitioning <https://github.com/locationtech/geotrellis/pull/2311>`__
+- `Don't constrain GridBounds size to IntMax x IntMax <https://github.com/locationtech/geotrellis/pull/2292>`__
+- `4-Connected Line Drawing <https://github.com/locationtech/geotrellis/pull/2336>`__
+- `Added requirement for CRS implementations to provide a readable toString representation. <https://github.com/locationtech/geotrellis/pull/2337>`__
+- `Allow rasterizer to store Z value at double precision <https://github.com/locationtech/geotrellis/pull/2388>`__
+- `Changed scheme path file from /User -> current working dir <https://github.com/locationtech/geotrellis/pull/2393>`__
+- `Fix CRS parser and proj4 cea projection support <https://github.com/locationtech/geotrellis/pull/2403>`__
+
+
 
 1.1.0
 -----

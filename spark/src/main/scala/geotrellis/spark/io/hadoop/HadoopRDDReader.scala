@@ -48,9 +48,9 @@ object HadoopRDDReader extends LazyLogging {
 
     sc.newAPIHadoopRDD(
       inputConf,
-      classOf[SequenceFileInputFormat[LongWritable, BytesWritable]],
-      classOf[LongWritable],
-      classOf[BytesWritable]
+      classOf[SequenceFileInputFormat[BigIntWritable, BytesWritable]],
+      classOf[BigIntWritable], // key class
+      classOf[BytesWritable]  // value class
      )
       .flatMap { case (keyWritable, valueWritable) =>
         AvroEncoder.fromBinary(kwWriterSchema.value.getOrElse(codec.schema), valueWritable.getBytes)(codec)
@@ -63,7 +63,7 @@ object HadoopRDDReader extends LazyLogging {
   ](
     path: Path,
     queryKeyBounds: Seq[KeyBounds[K]],
-    decomposeBounds: KeyBounds[K] => Seq[(Long, Long)],
+    decomposeBounds: KeyBounds[K] => Seq[(BigInt, BigInt)],
     indexFilterOnly: Boolean,
     writerSchema: Option[Schema] = None)
   (implicit sc: SparkContext): RDD[(K, V)] = {
@@ -86,7 +86,7 @@ object HadoopRDDReader extends LazyLogging {
     sc.newAPIHadoopRDD(
       inputConf,
       classOf[FilterMapFileInputFormat],
-      classOf[LongWritable],
+      classOf[BigIntWritable],
       classOf[BytesWritable]
     )
       .flatMap { case (keyWritable, valueWritable) =>

@@ -16,18 +16,20 @@
 
 package geotrellis.spark.io.hadoop
 
+import geotrellis.raster._
+import geotrellis.raster.resample._
 import geotrellis.spark._
 import geotrellis.spark.io._
 import geotrellis.spark.io.avro._
 import geotrellis.spark.io.avro.codecs._
 import geotrellis.spark.io.hadoop.formats.FilterMapFileInputFormat
-import geotrellis.spark.util.cache._
 
 import org.apache.hadoop.fs._
 import org.apache.hadoop.io._
 import org.apache.hadoop.conf.Configuration
 import org.apache.spark.SparkContext
 import spray.json._
+import com.github.blemale.scaffeine.{Cache, Scaffeine}
 
 import scala.collection.immutable._
 import scala.reflect.ClassTag
@@ -36,11 +38,17 @@ class HadoopValueReader(
   val attributeStore: AttributeStore,
   conf: Configuration,
   maxOpenFiles: Int = 16
-) extends ValueReader[LayerId] {
+) extends OverzoomingValueReader {
 
-  val readers = new LRUCache[(LayerId, Path), MapFile.Reader](maxOpenFiles.toLong, {x => 1l}) {
-    override def evicted(reader: MapFile.Reader) = reader.close()
-  }
+  val readers: Cache[(LayerId, Path), MapFile.Reader] =
+    Scaffeine()
+      .recordStats()
+      .maximumSize(maxOpenFiles.toLong)
+      .removalListener[(LayerId, Path), MapFile.Reader] { case (_, v, _) => v.close() }
+      .build[(LayerId, Path), MapFile.Reader]
+
+  private def predicate(row: (Path, BigInt, BigInt), index: BigInt): Boolean =
+    (index >= row._2) && ((index <= row._3) || (row._3 == -1))
 
   def reader[K: AvroRecordCodec: JsonFormat: ClassTag, V: AvroRecordCodec](layerId: LayerId): Reader[K, V] = new Reader[K, V] {
     val header = attributeStore.readHeader[HadoopLayerHeader](layerId)
@@ -48,21 +56,19 @@ class HadoopValueReader(
     val writerSchema = attributeStore.readSchema(layerId)
     val codec = KeyValueRecordCodec[K, V]
 
-    val ranges: Vector[(Path, Long, Long)] =
+    val ranges: Vector[(Path, BigInt, BigInt)] =
       FilterMapFileInputFormat.layerRanges(header.path, conf)
 
     def read(key: K): V = {
-      val index: Long = keyIndex.toIndex(key)
+      val index: BigInt = keyIndex.toIndex(key)
       val valueWritable: BytesWritable =
       ranges
-          .find{ row =>
-            index >= row._2 && index <= row._3
-          }
+        .find(row => predicate(row, index))
         .map { case (path, _, _) =>
-            readers.getOrInsert((layerId, path), new MapFile.Reader(path, conf))
+          readers.get((layerId, path), _ => new MapFile.Reader(path, conf))
         }
         .getOrElse(throw new ValueNotFoundError(key, layerId))
-          .get(new LongWritable(index), new BytesWritable())
+          .get(new BigIntWritable(index.toByteArray), new BytesWritable())
           .asInstanceOf[BytesWritable]
 
       if (valueWritable == null) throw new ValueNotFoundError(key, layerId)
@@ -81,6 +87,13 @@ object HadoopValueReader {
     layerId: LayerId
   )(implicit sc: SparkContext): Reader[K, V] =
     new HadoopValueReader(attributeStore, sc.hadoopConfiguration).reader[K, V](layerId)
+
+  def apply[K: AvroRecordCodec: JsonFormat: SpatialComponent: ClassTag, V <: CellGrid: AvroRecordCodec: ? => TileResampleMethods[V]](
+    attributeStore: AttributeStore,
+    layerId: LayerId,
+    resampleMethod: ResampleMethod
+  )(implicit sc: SparkContext): Reader[K, V] =
+    new HadoopValueReader(attributeStore, sc.hadoopConfiguration).overzoomingReader[K, V](layerId, resampleMethod)
 
   def apply(attributeStore: HadoopAttributeStore): HadoopValueReader =
     new HadoopValueReader(attributeStore, attributeStore.hadoopConfiguration)

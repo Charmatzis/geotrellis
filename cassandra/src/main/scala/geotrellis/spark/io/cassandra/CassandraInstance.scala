@@ -19,14 +19,18 @@ package geotrellis.spark.io.cassandra
 import com.datastax.driver.core.policies.{DCAwareRoundRobinPolicy, TokenAwarePolicy}
 import com.datastax.driver.core.{Cluster, Session}
 import com.typesafe.config.ConfigFactory
+
+import scala.util.Try
 import java.net.URI
 
 object CassandraInstance {
+  var bigIntegerRegistered: Boolean = false
+
   def apply(uri: URI): CassandraInstance = {
     import geotrellis.util.UriUtils._
 
     val zookeeper = uri.getHost
-    val port = if (uri.getPort < 0) 2181 else uri.getPort
+    val port = if (uri.getPort < 0) 9042 else uri.getPort
     val (user, pass) = getUserInfo(uri)
     val keyspace = Option(uri.getPath.drop(1))
       .getOrElse(Cassandra.cfg.getString("keyspace"))
@@ -36,7 +40,8 @@ object CassandraInstance {
     BaseCassandraInstance(
       List(zookeeper),
       user.getOrElse(""),
-      pass.getOrElse(""))
+      pass.getOrElse("")
+    )
   }
 }
 
@@ -53,12 +58,25 @@ trait CassandraInstance extends Serializable {
   val usedHostsPerRemoteDc: Int
   val allowRemoteDCsForLocalConsistencyLevel: Boolean
 
+  // TODO: remove during https://github.com/locationtech/geotrellis/issues/2077
+  final val port: Int = Try(Cassandra.cfg.getInt("port")).toOption.getOrElse(9042)
+
   /** Functions to get cluster / session for custom logic, where function wrapping can have an impact on speed */
-  def getCluster = Cluster.builder().withLoadBalancingPolicy(getLoadBalancingPolicy).addContactPoints(hosts: _*).build()
+  def getCluster = Cluster.builder().withLoadBalancingPolicy(getLoadBalancingPolicy).addContactPoints(hosts: _*).withPort(port).build()
   def getSession = getCluster.connect()
 
   @transient lazy val cluster = getCluster
   @transient lazy val session = cluster.connect()
+
+  def registerBigInteger(): Unit = {
+    if (!CassandraInstance.bigIntegerRegistered) {
+      cluster
+        .getConfiguration()
+        .getCodecRegistry()
+        .register(BigIntegerIffBigint.instance)
+      CassandraInstance.bigIntegerRegistered = true
+    }
+  }
 
   def ensureKeyspaceExists(keyspace: String, session: Session): Unit =
     session.execute(s"create keyspace if not exists ${keyspace} with replication = {'class': '${replicationStrategy}', 'replication_factor': ${replicationFactor} }")
@@ -101,7 +119,9 @@ case class BaseCassandraInstance(
   replicationFactor: Int = Cassandra.cfg.getInt("replicationFactor"),
   localDc: String = Cassandra.cfg.getString("localDc"),
   usedHostsPerRemoteDc: Int = Cassandra.cfg.getInt("usedHostsPerRemoteDc"),
-  allowRemoteDCsForLocalConsistencyLevel: Boolean = Cassandra.cfg.getBoolean("allowRemoteDCsForLocalConsistencyLevel")) extends CassandraInstance
+  allowRemoteDCsForLocalConsistencyLevel: Boolean = Cassandra.cfg.getBoolean("allowRemoteDCsForLocalConsistencyLevel")) extends CassandraInstance {
+  registerBigInteger()
+}
 
 object Cassandra {
   lazy val cfg = ConfigFactory.load().getConfig("geotrellis.cassandra")

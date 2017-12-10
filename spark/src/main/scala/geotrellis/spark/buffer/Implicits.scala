@@ -17,8 +17,8 @@
 package geotrellis.spark.buffer
 
 import geotrellis.raster._
-import geotrellis.raster.stitch._
 import geotrellis.raster.crop._
+import geotrellis.raster.stitch._
 import geotrellis.spark._
 
 import org.apache.spark.rdd.RDD

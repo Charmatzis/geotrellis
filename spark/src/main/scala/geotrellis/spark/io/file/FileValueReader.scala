@@ -16,6 +16,8 @@
 
 package geotrellis.spark.io.file
 
+import geotrellis.raster._
+import geotrellis.raster.resample._
 import geotrellis.spark._
 import geotrellis.spark.io._
 import geotrellis.spark.io.avro.codecs.KeyValueRecordCodec
@@ -33,7 +35,7 @@ import scala.reflect.ClassTag
 class FileValueReader(
   val attributeStore: AttributeStore,
   catalogPath: String
-) extends ValueReader[LayerId] {
+) extends OverzoomingValueReader {
 
   def reader[K: AvroRecordCodec: JsonFormat: ClassTag, V: AvroRecordCodec](layerId: LayerId): Reader[K, V] = new Reader[K, V] {
 
@@ -68,6 +70,14 @@ object FileValueReader {
     layerId: LayerId
   ): Reader[K, V] =
     new FileValueReader(attributeStore, catalogPath).reader(layerId)
+
+  def apply[K: AvroRecordCodec: JsonFormat: SpatialComponent: ClassTag, V <: CellGrid: AvroRecordCodec: ? => TileResampleMethods[V]](
+    attributeStore: AttributeStore,
+    catalogPath: String,
+    layerId: LayerId,
+    resampleMethod: ResampleMethod
+  ): Reader[K, V] =
+    new FileValueReader(attributeStore, catalogPath).overzoomingReader(layerId, resampleMethod)
 
   def apply(catalogPath: String): FileValueReader =
     new FileValueReader(new FileAttributeStore(catalogPath), catalogPath)

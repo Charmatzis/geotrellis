@@ -33,7 +33,7 @@ class Z3RangeSpec extends FunSpec with Matchers {
 
       ranges foreach { case (min, max) =>
         for (z <- min to max) {
-          val zobj = new Z3(z)
+          val zobj = new Z3(z.toLong)
           actualSet =  actualSet + Tuple3(zobj.dim(0),zobj.dim(1),zobj.dim(2))
           count += 1
         }
@@ -44,7 +44,7 @@ class Z3RangeSpec extends FunSpec with Matchers {
         z <- z1 to z2
         y <- y1 to y2
         x <- x1 to x2
-      } {        
+      } {
         expectedSet = expectedSet + Tuple3(x,y,z)
       }
 

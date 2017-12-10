@@ -22,12 +22,13 @@ import geotrellis.raster.io.geotiff._
 import geotrellis.raster.io.geotiff.reader.GeoTiffReader
 import geotrellis.spark._
 import geotrellis.util.{ByteReader, StreamingByteReader}
-import geotrellis.vector.ProjectedExtent
+import geotrellis.vector._
 
 import spire.syntax.cfor._
 
 import java.time.format.DateTimeFormatter
 import java.time.{ZoneOffset, ZonedDateTime}
+
 
 /**
   * Type class to read a raster either fully or partially from a ByteReader.
@@ -45,7 +46,7 @@ trait RasterReader[-O, R] extends Serializable {
 }
 
 object RasterReader {
-  
+
   trait Options {
     def crs: Option[CRS]
     def timeTag: String
@@ -60,6 +61,7 @@ object RasterReader {
   }
 
   /** List all pixel windows that cover a grid of given size */
+  @deprecated("use GeoTiffSegmentLayout.listWindows instead", "1.2")
   def listWindows(cols: Int, rows: Int, maxTileSize: Option[Int]): Array[GridBounds] = {
     val result = scala.collection.mutable.ArrayBuffer[GridBounds]()
     maxTileSize match {
@@ -96,11 +98,10 @@ object RasterReader {
 
     def readWindows(gbs: Array[GridBounds], info: GeoTiffReader.GeoTiffInfo, options: Options) = {
       val geoTiff = GeoTiffReader.geoTiffSinglebandTile(info)
-      val gridBounds = geoTiff.gridBounds
-      gbs
-        .filter(gridBounds.contains)
-        .map { gb => (ProjectedExtent(info.mapTransform(gb), options.crs.getOrElse(info.crs)), geoTiff.crop(gb)) }
-        .toIterator
+      val re = info.rasterExtent
+      geoTiff.crop(gbs.filter(geoTiff.gridBounds.intersects)).map { case (gb, tile) =>
+        (ProjectedExtent(re.extentFor(gb, clamp = false), options.crs.getOrElse(info.crs)), tile)
+      }
     }
   }
 
@@ -119,11 +120,10 @@ object RasterReader {
 
     def readWindows(gbs: Array[GridBounds], info: GeoTiffReader.GeoTiffInfo, options: Options) = {
       val geoTiff = GeoTiffReader.geoTiffMultibandTile(info)
-      val gridBounds = geoTiff.gridBounds
-      gbs
-        .filter(gridBounds.contains)
-        .map { gb => (ProjectedExtent(info.mapTransform(gb), options.crs.getOrElse(info.crs)), geoTiff.crop(gb)) }
-        .toIterator
+      val re = info.rasterExtent
+      geoTiff.crop(gbs.filter(geoTiff.gridBounds.intersects)).map { case (gb, tile) =>
+        (ProjectedExtent(re.extentFor(gb, clamp = false), options.crs.getOrElse(info.crs)), tile)
+      }
     }
   }
 
@@ -146,16 +146,14 @@ object RasterReader {
 
     def readWindows(gbs: Array[GridBounds], info: GeoTiffReader.GeoTiffInfo, options: Options) = {
       val geoTiff = GeoTiffReader.geoTiffSinglebandTile(info)
-      val gridBounds = geoTiff.gridBounds
-      gbs
-        .filter(gridBounds.contains)
-        .map { gb =>
-          (TemporalProjectedExtent(
-            info.mapTransform(gb),
-            crs = options.crs.getOrElse(info.crs),
-            options.parseTime(info.tags)), geoTiff.crop(gb))
-        }
-        .toIterator
+      val re = info.rasterExtent
+      geoTiff.crop(gbs.filter(geoTiff.gridBounds.intersects)).map { case (gb, tile) =>
+        (TemporalProjectedExtent(
+          extent = re.extentFor(gb, clamp = false),
+          crs = options.crs.getOrElse(info.crs),
+          options.parseTime(info.tags)),
+        tile)
+      }
     }
   }
 
@@ -178,16 +176,14 @@ object RasterReader {
 
     def readWindows(gbs: Array[GridBounds], info: GeoTiffReader.GeoTiffInfo, options: Options) = {
       val geoTiff = GeoTiffReader.geoTiffMultibandTile(info)
-      val gridBounds = geoTiff.gridBounds
-      gbs
-        .filter(gridBounds.contains)
-        .map { gb =>
-          (TemporalProjectedExtent(
-            info.mapTransform(gb),
-            options.crs.getOrElse(info.crs),
-            options.parseTime(info.tags)), geoTiff.crop(gb))
-        }
-        .toIterator
+      val re = info.rasterExtent
+      geoTiff.crop(gbs.filter(geoTiff.gridBounds.intersects)).map { case (gb, tile) =>
+        (TemporalProjectedExtent(
+          extent = re.extentFor(gb, clamp = false ),
+          crs = options.crs.getOrElse(info.crs),
+          options.parseTime(info.tags)),
+        tile)
+      }
     }
   }
 }

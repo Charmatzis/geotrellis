@@ -41,6 +41,8 @@ import java.util.concurrent.Executors
 
 import scala.collection.JavaConversions._
 
+import java.math.BigInteger
+
 
 object CassandraRDDWriter {
   final val DefaultThreadCount =
@@ -50,7 +52,7 @@ object CassandraRDDWriter {
     rdd: RDD[(K, V)],
     instance: CassandraInstance,
     layerId: LayerId,
-    decomposeKey: K => Long,
+    decomposeKey: K => BigInt,
     keyspace: String,
     table: String,
     threads: Int = DefaultThreadCount
@@ -60,7 +62,7 @@ object CassandraRDDWriter {
     raster: RDD[(K, V)],
     instance: CassandraInstance,
     layerId: LayerId,
-    decomposeKey: K => Long,
+    decomposeKey: K => BigInt,
     keyspace: String,
     table: String,
     writerSchema: Option[Schema],
@@ -75,7 +77,7 @@ object CassandraRDDWriter {
       instance.ensureKeyspaceExists(keyspace, session)
       session.execute(
         SchemaBuilder.createTable(keyspace, table).ifNotExists()
-          .addPartitionKey("key", bigint)
+          .addPartitionKey("key", varint)
           .addClusteringColumn("name", text)
           .addClusteringColumn("zoom", cint)
           .addColumn("value", blob)
@@ -112,7 +114,7 @@ object CassandraRDDWriter {
               val readStatement = session.prepare(readQuery)
               val writeStatement = session.prepare(writeQuery)
 
-              val rows: Process[Task, (java.lang.Long, Vector[(K,V)])] =
+              val rows: Process[Task, (BigInt, Vector[(K,V)])] =
                 Process.unfold(partition)({ iter =>
                   if (iter.hasNext) {
                     val record = iter.next()
@@ -122,12 +124,12 @@ object CassandraRDDWriter {
 
               val pool = Executors.newFixedThreadPool(threads)
 
-              def elaborateRow(row: (java.lang.Long, Vector[(K,V)])): Process[Task, (java.lang.Long, Vector[(K,V)])] = {
+              def elaborateRow(row: (BigInt, Vector[(K,V)])): Process[Task, (BigInt, Vector[(K,V)])] = {
                 Process eval Task ({
                   val (key, kvs1) = row
                   val kvs2 =
                     if (mergeFunc.nonEmpty) {
-                      val oldRow = session.execute(readStatement.bind(key))
+                      val oldRow = session.execute(readStatement.bind(key: BigInteger))
                       if (oldRow.nonEmpty) {
                         val bytes = oldRow.one().getBytes("value").array()
                         AvroEncoder.fromBinary(kwWriterSchema.value.getOrElse(_recordCodec.schema), bytes)(_recordCodec)
@@ -148,7 +150,7 @@ object CassandraRDDWriter {
                 })(pool)
               }
 
-              def rowToBytes(row: (java.lang.Long, Vector[(K,V)])): Process[Task, (java.lang.Long, ByteBuffer)] = {
+              def rowToBytes(row: (BigInt, Vector[(K,V)])): Process[Task, (BigInt, ByteBuffer)] = {
                 Process eval Task({
                   val (key, kvs) = row
                   val bytes = ByteBuffer.wrap(AvroEncoder.toBinary(kvs)(codec))
@@ -156,10 +158,10 @@ object CassandraRDDWriter {
                 })(pool)
               }
 
-              def retire(row: (java.lang.Long, ByteBuffer)): Process[Task, ResultSet] = {
+              def retire(row: (BigInt, ByteBuffer)): Process[Task, ResultSet] = {
                 val (id, value) = row
                 Process eval Task({
-                  session.execute(writeStatement.bind(id, value))
+                  session.execute(writeStatement.bind(id: BigInteger, value))
                 })(pool)
               }
 

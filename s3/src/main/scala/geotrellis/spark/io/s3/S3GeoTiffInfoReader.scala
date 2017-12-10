@@ -18,6 +18,7 @@ package geotrellis.spark.io.s3
 
 import geotrellis.raster.io.geotiff.reader.GeoTiffReader
 import geotrellis.raster.io.geotiff.reader.GeoTiffReader.GeoTiffInfo
+import geotrellis.raster.io.geotiff.tags.TiffTags
 import geotrellis.spark.io._
 import geotrellis.spark.io.s3.util.S3RangeReader
 
@@ -32,20 +33,9 @@ case class S3GeoTiffInfoReader(
   getS3Client: () => S3Client = () => S3Client.DEFAULT,
   delimiter: Option[String] = None,
   decompress: Boolean = false,
-  streaming: Boolean = true
+  streaming: Boolean = true,
+  tiffExtensions: Seq[String] = S3GeoTiffRDD.Options.DEFAULT.tiffExtensions
 ) extends GeoTiffInfoReader {
-  lazy val geoTiffInfo: List[(String, GeoTiffInfo)] = {
-    val s3Client = getS3Client()
-
-    val listObjectsRequest =
-      delimiter
-        .fold(new ListObjectsRequest(bucket, prefix, null, null, null))(new ListObjectsRequest(bucket, prefix, null, _, null))
-
-    s3Client
-      .listKeys(listObjectsRequest)
-      .toList
-      .map(key => (key, GeoTiffReader.readGeoTiffInfo(S3RangeReader(bucket, key, getS3Client()), decompress, streaming)))
-  }
 
   /** Returns RDD of URIs to tiffs as GeoTiffInfo is not serializable. */
   def geoTiffInfoRdd(implicit sc: SparkContext): RDD[String] = {
@@ -54,12 +44,19 @@ case class S3GeoTiffInfoReader(
         .fold(new ListObjectsRequest(bucket, prefix, null, null, null))(new ListObjectsRequest(bucket, prefix, null, _, null))
 
     sc.parallelize(getS3Client().listKeys(listObjectsRequest))
-      .map(key => s"s3://$bucket/$key")
+      .flatMap(key => if(tiffExtensions.exists(key.endsWith)) Some(s"s3://$bucket/$key") else None)
   }
 
   def getGeoTiffInfo(uri: String): GeoTiffInfo = {
     val s3Uri = new AmazonS3URI(uri)
-    GeoTiffReader.readGeoTiffInfo(S3RangeReader(s3Uri.getBucket, s3Uri.getKey, getS3Client()), decompress, streaming)
+    val rr = S3RangeReader(s3Uri.getBucket, s3Uri.getKey, getS3Client())
+    GeoTiffReader.readGeoTiffInfo(rr, decompress, streaming)
+  }
+
+  def getGeoTiffTags(uri: String): TiffTags = {
+    val s3Uri = new AmazonS3URI(uri)
+    val rr = S3RangeReader(s3Uri.getBucket, s3Uri.getKey, getS3Client())
+    TiffTags(rr)
   }
 }
 
@@ -68,5 +65,5 @@ object S3GeoTiffInfoReader {
     bucket: String,
     prefix: String,
     options: S3GeoTiffRDD.Options
-  ): S3GeoTiffInfoReader = S3GeoTiffInfoReader(bucket, prefix, options.getS3Client, options.delimiter)
+  ): S3GeoTiffInfoReader = S3GeoTiffInfoReader(bucket, prefix, options.getS3Client, options.delimiter, tiffExtensions = options.tiffExtensions)
 }
