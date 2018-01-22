@@ -5,7 +5,7 @@ import geotrellis.raster.rasterize._
 import geotrellis.spark._
 import geotrellis.spark.tiling._
 import geotrellis.vector._
-
+import geotrellis.spark.density.RDDKernelDensity.Adder
 import org.apache.spark.rdd._
 import org.apache.spark.{HashPartitioner, Partitioner}
 import org.apache.spark.rdd._
@@ -32,11 +32,12 @@ object RasterizeRDD {
     value: Double,
     cellType: CellType,
     layout: LayoutDefinition,
+    add: Boolean = false,
     options: Rasterizer.Options = Rasterizer.Options.DEFAULT,
     partitioner: Option[Partitioner] = None
   ): RDD[(SpatialKey, Tile)] with Metadata[LayoutDefinition] = {
     val features = geoms.map({ g => Feature(g, value) })
-    fromFeature(features, cellType, layout, options, partitioner)
+    fromFeature(features, cellType, layout, options, partitioner, add)
   }
 
   /**
@@ -49,46 +50,77 @@ object RasterizeRDD {
    * @param cellType [[CellType]] for creating raster tiles
    * @param options Rasterizer options for cell intersection rules
    * @param partitioner Partitioner for result RDD
+    * @param add merge of add
    */
   def fromFeature[G <: Geometry](
     features: RDD[Feature[G, Double]],
     cellType: CellType,
     layout: LayoutDefinition,
     options: Rasterizer.Options = Rasterizer.Options.DEFAULT,
-    partitioner: Option[Partitioner] = None
+    partitioner: Option[Partitioner] = None,
+    add: Boolean = false
   ): RDD[(SpatialKey, Tile)] with Metadata[LayoutDefinition] = {
+
+
     // key the geometry to intersecting tiles so it can be rasterized in the map-side combine
     val keyed: RDD[(SpatialKey, (Feature[Geometry, Double], SpatialKey))] =
       features.flatMap { feature =>
-        layout.mapTransform.keysForGeometry(feature.geom).toIterator
-          .map(key => (key, (feature, key)) )
+
+          layout.mapTransform.keysForGeometry(feature.geom).toIterator
+            .map(key => (key, (feature, key)) )
+
       }
 
     val createTile = (tup: (Feature[Geometry, Double], SpatialKey)) => {
       val (feature, key) = tup
       val tile = ArrayTile.empty(cellType, layout.tileCols, layout.tileRows)
       val re = RasterExtent(layout.mapTransform(key), layout.tileCols, layout.tileRows)
-      feature.geom.foreach(re, options)({ (x, y) =>
-        tile.setDouble(x, y, feature.data)
-      })
+      if(add) {
+        feature.geom.foreach(re, options) {{ (x, y) =>
+          val r = tile.getDouble(x,y)
+          if (isNoData(r)) { tile.setDouble(x, y, feature.data) }
+          else tile.setDouble(x, y, feature.data + r)
+
+        }
+        }
+      }
+      else {
+        feature.geom.foreach(re, options)({ (x, y) =>
+          if(x == -1  || y == -1){
+            println("point x: " + feature.geom.as[Point].get.x + " point y: " +feature.geom.as[Point].get.y )
+          }
+          tile.setDouble(x, y, feature.data)
+        })
+      }
       tile: MutableArrayTile
     }
 
-    val updateTile = (
-      tile: MutableArrayTile,
-      tup: (Feature[Geometry, Double], SpatialKey)
-    ) => {
+
+    val updateTile = (tile: MutableArrayTile, tup: (Feature[Geometry, Double], SpatialKey)) => {
       val (feature, key) = tup
       val re = RasterExtent(layout.mapTransform(key), layout.tileCols, layout.tileRows)
-
-      feature.geom.foreach(re, options){
-        tile.setDouble(_, _, feature.data)
+     if(add) {
+        feature.geom.foreach(re, options) {{ (x, y) =>
+          val r = tile.getDouble(x,y)
+          if (isNoData(r)) { tile.setDouble(x, y, feature.data) }
+            else tile.setDouble(x, y, feature.data + r)
+        }
+        }
+      }
+      else {
+        feature.geom.foreach(re, options)({ (x, y) =>
+          if(x == -1  || y == -1){
+            println("point x: " + feature.geom.as[Point].get.x + " point y: " +feature.geom.as[Point].get.y )
+          }
+          tile.setDouble(x, y, feature.data)
+        })
       }
       tile: MutableArrayTile
     }
 
     val mergeTiles = (left: MutableArrayTile, right: MutableArrayTile) => {
-      left.merge(right).mutable
+      if(add)  Adder(left, right).mutable
+      else left.merge(right).mutable
     }
 
     val tiles: RDD[(SpatialKey, MutableArrayTile)] =

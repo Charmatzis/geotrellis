@@ -46,10 +46,11 @@ trait GeometryRDDRasterizeMethods[G <: Geometry] extends MethodExtensions[RDD[G]
     value: Double,
     cellType: CellType,
     layout: LayoutDefinition,
+    add: Boolean = false,
     options: Rasterizer.Options = Rasterizer.Options.DEFAULT,
     partitioner: Option[Partitioner] = None
   ): RDD[(SpatialKey, Tile)] with Metadata[LayoutDefinition] = {
-    RasterizeRDD.fromGeometry(self, value, cellType, layout, options, partitioner)
+    RasterizeRDD.fromGeometry(self, value, cellType, layout,add, options, partitioner)
   }
 }
 
@@ -72,10 +73,11 @@ trait FeatureRDDRasterizeMethods[G <: Geometry] extends MethodExtensions[RDD[Fea
   def rasterize(
     cellType: CellType,
     layout: LayoutDefinition,
+    add: Boolean = false,
     options: Rasterizer.Options = Rasterizer.Options.DEFAULT,
     partitioner: Option[Partitioner] = None
   ): RDD[(SpatialKey, Tile)] with Metadata[LayoutDefinition] = {
-    RasterizeRDD.fromFeature(self, cellType, layout, options, partitioner)
+    RasterizeRDD.fromFeature(self, cellType, layout, options, partitioner, add)
   }
 }
 
