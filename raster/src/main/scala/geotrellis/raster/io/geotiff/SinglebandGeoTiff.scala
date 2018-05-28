@@ -21,18 +21,27 @@ import geotrellis.raster._
 import geotrellis.raster.io.geotiff.reader.GeoTiffReader
 import geotrellis.vector.Extent
 import geotrellis.proj4.CRS
+import geotrellis.raster.crop.Crop
+import geotrellis.raster.resample.ResampleMethod
+import spire.syntax.cfor._
+
+import java.nio.ByteBuffer
 
 case class SinglebandGeoTiff(
   tile: Tile,
   extent: Extent,
   crs: CRS,
   tags: Tags,
-  options: GeoTiffOptions
+  options: GeoTiffOptions,
+  overviews: List[GeoTiff[Tile]] = Nil
 ) extends GeoTiff[Tile] {
   val cellType = tile.cellType
 
   def mapTile(f: Tile => Tile): SinglebandGeoTiff =
-    SinglebandGeoTiff(f(tile), extent, crs, tags, options)
+    SinglebandGeoTiff(f(tile), extent, crs, tags, options, overviews)
+
+  def withStorageMethod(storageMethod: StorageMethod): SinglebandGeoTiff =
+    SinglebandGeoTiff(tile.toArrayTile, extent, crs, tags, options.copy(storageMethod = storageMethod), overviews)
 
   def imageData: GeoTiffImageData =
     tile match {
@@ -40,11 +49,11 @@ case class SinglebandGeoTiff(
       case _ => tile.toGeoTiffTile(options)
     }
 
-  def crop(subExtent: Extent): SinglebandGeoTiff = {
+  def crop(subExtent: Extent, options: Crop.Options): SinglebandGeoTiff = {
     val raster: Raster[Tile] =
-      this.raster.crop(subExtent)
+      this.raster.crop(subExtent, options)
 
-    SinglebandGeoTiff(raster, subExtent, this.crs, this.tags, this.options)
+    SinglebandGeoTiff(raster, subExtent, this.crs, this.tags, this.options, this.overviews)
   }
 
   def crop(colMax: Int, rowMax: Int): SinglebandGeoTiff =
@@ -54,8 +63,87 @@ case class SinglebandGeoTiff(
     val raster: Raster[Tile] =
       this.raster.crop(colMin, rowMin, colMax, rowMax)
 
-    SinglebandGeoTiff(raster, raster._2, this.crs, this.tags, this.options)
+    SinglebandGeoTiff(raster, raster._2, this.crs, this.tags, this.options, this.overviews)
   }
+
+  def crop(gridBounds: GridBounds): SinglebandGeoTiff =
+    crop(gridBounds.colMin, gridBounds.rowMin, gridBounds.colMax, gridBounds.rowMax)
+  
+  def crop(subExtent: Extent): SinglebandGeoTiff = crop(subExtent, Crop.Options.DEFAULT)
+
+  def crop(subExtent: Extent, cellSize: CellSize, resampleMethod: ResampleMethod, strategy: OverviewStrategy): SinglebandRaster =
+    getClosestOverview(cellSize, strategy)
+      .crop(subExtent, Crop.Options(clamp = false))
+      .resample(RasterExtent(subExtent, cellSize), resampleMethod, strategy)
+
+  def crop(windows: Seq[GridBounds]): Iterator[(GridBounds, Tile)] = tile match {
+    case geotiffTile: GeoTiffTile => geotiffTile.crop(windows)
+    case arrayTile: Tile => arrayTile.crop(windows)
+  }
+
+  def resample(rasterExtent: RasterExtent, resampleMethod: ResampleMethod, strategy: OverviewStrategy): SinglebandRaster =
+    getClosestOverview(cellSize, strategy)
+      .raster
+      .resample(rasterExtent, resampleMethod)
+
+  def buildOverview(resampleMethod: ResampleMethod, decimationFactor: Int, blockSize: Int): SinglebandGeoTiff = {
+    val overviewRasterExtent = RasterExtent(
+      extent,
+      cols = math.ceil(tile.cols.toDouble / decimationFactor).toInt,
+      rows = math.ceil(tile.rows.toDouble / decimationFactor).toInt
+    )
+
+    val segmentLayout: GeoTiffSegmentLayout = GeoTiffSegmentLayout(
+      totalCols = overviewRasterExtent.cols,
+      totalRows = overviewRasterExtent.rows,
+      storageMethod = Tiled(blockSize, blockSize),
+      interleaveMethod = PixelInterleave,
+      bandType = BandType.forCellType(tile.cellType))
+
+    // force ArrayTile to avoid costly compressor thrashing in GeoTiff segments when resample will stride segments
+    val segments: Seq[((Int, Int), Tile)] = Raster(tile.toArrayTile(), extent)
+      .resample(overviewRasterExtent, resampleMethod)
+      .tile
+      .split(segmentLayout.tileLayout)
+      .zipWithIndex
+      .map { case (tile, index) =>
+        val col = index % segmentLayout.tileLayout.layoutCols
+        val row = index / segmentLayout.tileLayout.layoutCols
+        ((col, row), tile)
+      }
+
+    val storageMethod = Tiled(blockSize, blockSize)
+    val overviewOptions = options.copy(subfileType = Some(ReducedImage), storageMethod = storageMethod)
+    val overviewTile = GeoTiffBuilder[Tile].makeTile(
+      segments.toIterator, segmentLayout, cellType, options.compression
+    )
+
+    SinglebandGeoTiff(overviewTile, extent, crs, Tags.empty, overviewOptions)
+  }
+
+  def withOverviews(resampleMethod: ResampleMethod, decimations: List[Int] = Nil, blockSize: Int = GeoTiff.DefaultBlockSize): SinglebandGeoTiff = {
+    val overviewDecimations: List[Int] =
+      if (decimations.isEmpty) {
+        GeoTiff.defaultOverviewDecimations(tile.cols, tile.rows, blockSize)
+      } else {
+        decimations
+      }
+
+    if (overviewDecimations.isEmpty) {
+      this
+    } else {
+      // force ArrayTile to avoid costly compressor thrashing in GeoTiff segments when resample will stride segments
+      val arrayTile = tile.toArrayTile()
+      val staged = SinglebandGeoTiff(arrayTile, extent, crs, tags, options, Nil)
+      val overviews = overviewDecimations.map { (decimationFactor: Int) =>
+        staged.buildOverview(resampleMethod, decimationFactor, blockSize)
+      }
+      SinglebandGeoTiff(tile, extent, crs, tags, options, overviews)
+    }
+  }
+
+  def copy(tile: Tile = tile, extent: Extent = extent, crs: CRS = crs, tags: Tags = tags, options: GeoTiffOptions = options, overviews: List[GeoTiff[Tile]] = overviews): SinglebandGeoTiff =
+    SinglebandGeoTiff(tile, extent, crs, tags, options, overviews)
 }
 
 object SinglebandGeoTiff {
@@ -68,16 +156,14 @@ object SinglebandGeoTiff {
     SinglebandGeoTiff(tile, extent, crs, Tags.empty, GeoTiffOptions.DEFAULT)
 
   /** Read a single-band GeoTIFF file from a byte array.
-    * The GeoTIFF will be fully decompressed and held in memory.
     */
   def apply(bytes: Array[Byte]): SinglebandGeoTiff =
     GeoTiffReader.readSingleband(bytes)
 
   /** Read a single-band GeoTIFF file from a byte array.
-    * If decompress = true, the GeoTIFF will be fully decompressed and held in memory.
     */
-  def apply(bytes: Array[Byte], decompress: Boolean, streaming: Boolean): SinglebandGeoTiff =
-    GeoTiffReader.readSingleband(bytes, decompress, streaming)
+  def apply(bytes: Array[Byte], streaming: Boolean): SinglebandGeoTiff =
+    GeoTiffReader.readSingleband(bytes, streaming)
 
   /** Read a single-band GeoTIFF file from the file at the given path.
     * The GeoTIFF will be fully decompressed and held in memory.
@@ -92,10 +178,9 @@ object SinglebandGeoTiff {
     GeoTiffReader.readSingleband(path, e)
 
   /** Read a single-band GeoTIFF file from the file at the given path.
-    * If decompress = true, the GeoTIFF will be fully decompressed and held in memory.
     */
-  def apply(path: String, decompress: Boolean, streaming: Boolean): SinglebandGeoTiff =
-    GeoTiffReader.readSingleband(path, decompress, streaming)
+  def apply(path: String, streaming: Boolean): SinglebandGeoTiff =
+    GeoTiffReader.readSingleband(path, streaming)
 
   def apply(byteReader: ByteReader): SinglebandGeoTiff =
     GeoTiffReader.readSingleband(byteReader)
@@ -106,21 +191,9 @@ object SinglebandGeoTiff {
   def apply(byteReader: ByteReader, e: Option[Extent]): SinglebandGeoTiff =
     GeoTiffReader.readSingleband(byteReader, e)
 
-  /** Read a single-band GeoTIFF file from the file at the given path.
-    * The tile data will remain tiled/striped and compressed in the TIFF format.
-    */
-  def compressed(path: String): SinglebandGeoTiff =
-    GeoTiffReader.readSingleband(path, false, false)
-
-  /** Read a single-band GeoTIFF file from a byte array.
-    * The tile data will remain tiled/striped and compressed in the TIFF format.
-    */
-  def compressed(bytes: Array[Byte]): SinglebandGeoTiff =
-    GeoTiffReader.readSingleband(bytes, false, false)
-
   def streaming(path: String): SinglebandGeoTiff =
-    GeoTiffReader.readSingleband(path, false, true)
+    GeoTiffReader.readSingleband(path, true)
 
   def streaming(byteReader: ByteReader): SinglebandGeoTiff =
-    GeoTiffReader.readSingleband(byteReader, false, true)
+    GeoTiffReader.readSingleband(byteReader, true)
 }

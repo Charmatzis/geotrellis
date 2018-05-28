@@ -18,6 +18,7 @@ package geotrellis.spark.io.hadoop
 
 import geotrellis.spark._
 import geotrellis.spark.io._
+import geotrellis.spark.util._
 
 import spray.json._
 import DefaultJsonProtocol._
@@ -28,10 +29,16 @@ import org.apache.hadoop.conf.Configuration
 import java.io.PrintWriter
 import scala.util.matching.Regex
 
-class HadoopAttributeStore(val rootPath: Path, val hadoopConfiguration: Configuration) extends BlobLayerAttributeStore {
+class HadoopAttributeStore(
+  val rootPathString: String,
+  val conf: SerializableConfiguration
+) extends BlobLayerAttributeStore {
   import HadoopAttributeStore._
 
-  val (fs, attributePath) = {
+  def rootPath = new Path(rootPathString)
+  def hadoopConfiguration = conf.value
+
+  @transient lazy val fsAndPath = {
     val ap = new Path(rootPath, "_attributes")
     val fs = ap.getFileSystem(hadoopConfiguration)
 
@@ -41,6 +48,9 @@ class HadoopAttributeStore(val rootPath: Path, val hadoopConfiguration: Configur
     // Get the absolute path to attributes
     (fs, fs.getFileStatus(ap).getPath)
   }
+
+  def fs = fsAndPath._1
+  def attributePath = fsAndPath._2
 
   def attributePath(layerId: LayerId, attributeName: String): Path = {
     val fname = s"${layerId.name}${SEP}${layerId.zoom}${SEP}${attributeName}.json"
@@ -58,7 +68,7 @@ class HadoopAttributeStore(val rootPath: Path, val hadoopConfiguration: Configur
     new Path(s"*${SEP}${attributeName}.json")
 
   def layerWildcard(layerId: LayerId): Path =
-    new Path(s"${layerId.name}${SEP}${layerId.name}${SEP}*.json")
+    new Path(s"${layerId.name}${SEP}${layerId.zoom}*.json")
 
   private def readFile[T: JsonFormat](path: Path): Option[(LayerId, T)] = {
     HdfsUtils
@@ -141,8 +151,11 @@ class HadoopAttributeStore(val rootPath: Path, val hadoopConfiguration: Configur
       .distinct
 
   def availableAttributes(layerId: LayerId): Seq[String] = {
+    val metadataRelativeParentPath =
+      attributePath(layerId, AttributeStore.Fields.metadata).toUri.getPath.getParent()
+
     HdfsUtils
-      .listFiles(layerWildcard(layerId), hadoopConfiguration)
+      .listFiles(new Path(metadataRelativeParentPath, layerWildcard(layerId)), hadoopConfiguration)
       .map { path: Path =>
         val attributeRx(name, zoom, attribute) = path.getName
         attribute
@@ -155,12 +168,12 @@ object HadoopAttributeStore {
   final val SEP = "___"
 
   val attributeRx = {
-    val slug = "[a-zA-Z0-9-]+"
+    val slug = "[a-zA-Z0-9-_.]+"
     new Regex(s"""($slug)$SEP($slug)${SEP}($slug).json""", "layer", "zoom", "attribute")
   }
 
   def apply(rootPath: Path, config: Configuration): HadoopAttributeStore =
-    new HadoopAttributeStore(rootPath, config)
+    new HadoopAttributeStore(rootPath.toUri.toString, SerializableConfiguration(config))
 
   def apply(rootPath: Path)(implicit sc: SparkContext): HadoopAttributeStore =
     apply(rootPath, sc.hadoopConfiguration)

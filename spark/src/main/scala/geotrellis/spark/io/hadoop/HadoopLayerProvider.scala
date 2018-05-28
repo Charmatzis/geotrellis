@@ -30,10 +30,10 @@ import java.net.URI
  * `wasb` and `wasbs` provide support for the Hadoop Azure connector. Additional
  * configuration is required for this.
  * This Provider intentinally does not handle the `s3` scheme because the Hadoop implemintation is poor.
- * That support is provided by [[S3Attributestore]]
+ * That support is provided by [[HadoopAttributeStore]]
  */
 class HadoopLayerProvider extends AttributeStoreProvider
-    with LayerReaderProvider with LayerWriterProvider with ValueReaderProvider {
+    with LayerReaderProvider with LayerWriterProvider with ValueReaderProvider with CollectionLayerReaderProvider {
   val schemes: Array[String] = Array("hdfs", "hdfs+file", "s3n", "s3a", "wasb", "wasbs")
 
   private def trim(uri: URI): URI =
@@ -41,12 +41,15 @@ class HadoopLayerProvider extends AttributeStoreProvider
       new URI(uri.toString.stripPrefix("hdfs+"))
     else uri
 
-  def canProcess(uri: URI): Boolean = schemes contains uri.getScheme.toLowerCase
+  def canProcess(uri: URI): Boolean = uri.getScheme match {
+    case str: String => schemes contains str.toLowerCase
+    case null => false
+  }
 
   def attributeStore(uri: URI): AttributeStore = {
     val path = new Path(trim(uri))
     val conf = new Configuration()
-    new HadoopAttributeStore(path, conf)
+    HadoopAttributeStore(path, conf)
   }
 
   def layerReader(uri: URI, store: AttributeStore, sc: SparkContext): FilteringLayerReader[LayerId] = {
@@ -69,5 +72,12 @@ class HadoopLayerProvider extends AttributeStoreProvider
     val conf = new Configuration()
     val maxOpenFiles = params.getOrElse("maxOpenFiles", "16").toInt
     new HadoopValueReader(store, conf, maxOpenFiles)
+  }
+
+  def collectionLayerReader(uri: URI, store: AttributeStore) = {
+    val _uri = trim(uri)
+    val path = new Path(_uri)
+    val conf = new Configuration()
+    HadoopCollectionLayerReader(path, conf)
   }
 }

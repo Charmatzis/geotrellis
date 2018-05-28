@@ -9,9 +9,88 @@ API Changes
 
 - ``geotrellis.spark``
 
+
+  - **Deprecation:**  ``geotrellis.slick`` is being deprecated and will likely be moved to an external repo
+  - **Change:**  ``geotrellis.slick.Projected`` has been moved to ``geotrellis.vector.Projected``
   - **Change:**  The length of the key (the space-filling curve index or address) used for layer reading and writing has
     been extended from a fixed length of 8 bytes to an arbitrary length.  This change affects not only the
     ``geotrellis.spark`` package, but all backends (excluding ``geotrellis.geowave`` and ``geotrellis.geomesa``).
+  - **New:** All focal operations now except an optional ``partitioner`` parameter.
+  - **New:** ``BufferTiles``\s ``apply`` methods and the ``bufferTiles`` methods now except an optional ``partitioner`` parameter.
+
+  - **Change:** Reprojection has improved performance due to one less shuffle stage and lower memory usage.
+  ``TileRDDReproject`` loses dependency on ``TileReprojectMethods`` in favor of ``RasterRegionReproject``
+  - **New:** CollectionLayerReader now has an SPI interface.
+  - **New:** ``ZoomResample`` can now be used on ``MultibandTileLayerRDD``\s.
+  - **New:** A ``Partitioner`` can be specified in the ``reproject`` methods of ``TileLayerRDD``.
+  - **New:** Compression ``level`` of GeoTiffs can be specified in the ``DeflateCompression`` constructor.
+  - **Change:**: The Ascii draw methods are now method extensions of ``Tile``.
+  - **Change:** Replace `geotrellis.util.Functor` with `cats.Functor`.
+  - **Change:** Specifying the ``maxTileSize`` for a COGLayer that's to be written is now done via ``COGLayerWriter.Options``
+    which can be passed directly to the ``write`` methods.
+  - **New:** The ``resampleMethod`` parameter has been added to ``COGLayerWriter.Options``.
+  - **Change:** Specifying the ``compression`` for a COGLayer that's to be written is now done via ``COGLayerWriter.Options``
+    which can be passed directly to the ``write`` methods.
+  - **New:** A new type called ``LayerType`` has been created to help identify the nature of a layer (either Avro or COG).
+  - **New:** ``LayerHeader``\s now have an additional parameter: ``layerType``.
+  - **Change:** The attribute name for ``COGLayerStorageMetadata`` is now ``metadata`` instead of ``cog_metadata``.
+  - **New:** ``AttributeStore`` now has four new methods: ``layerType``, ``isCOGLayer``, ``readCOGLayerAttributes``,
+    and ``writeCOGLayerAttributes``.
+  - **New:** Kryo serialization of geometry now uses a binary format to reduce shuffle block size.
+  - **Change:** Scalaz streams were replaced by fs2 streams.
+  - **Change:** Refactored HBaseInstance, now accepts a plain Hadoop Configuration object.
+  - **Change:** Refactored CassandraInstance, now accepts a getCluster function.
+  - **Change:** Use pureconfig to handle all work with configuration files.
+  - **Change:** Replace `geotrellis.util.Functor` with `cats.Functor`.
+  - **Remove:** ``LayerUpdater`` with its functionality covered by ``LayerWriter`` <https://github.com/locationtech/geotrellis/pull/2663>__
+  - **New:** Alter `geotrellis.spark.stitch.StitchRDDMethods` to allow `RDD[(K, V)]` to be stitched when not all tiles are
+    of the same dimension.
+  - **Change:** Change `TilerMethods.tileToLayout` functions that accept `TileLayerMetadata` as an argument to return `RDD[(K, V)] with Metadata[M]`
+    instead of `RDD[(K, V)]`
+  - **New:** Introduce ``Pyramid`` class to provide a convenience wrapper for building raster pyramids
+  - **Change:** Expose ``attributeStore`` parameter to LayerReader interface
+
+- ``geotrellis.raster``
+
+  - **Change:** Removed ``decompress`` option from `GeoTiffReader` functions.
+  - **New:** Kryo serialization of geometry now uses a binary format to reduce shuffle block size
+  - **Change:** Scalaz streams were replaced by fs2 streams
+
+Fixes
+^^^^^
+
+- `StreamingHistogram.binCount now returns non-zero counts <https://github.com/locationtech/geotrellis/pull/2590>`__
+- `HilbertSpatialKeyIndex index offset <https://github.com/locationtech/geotrellis/pull/2586>`__
+  - **Note:** Existing spatial layers using Hilbert index will need to be updated, see PR for directions.
+- Fixed ``CastException`` that sometimes occured when reading cached attributes.
+- Uncompressed GeoTiffMultibandTiles will now convert to the correct CellType.
+- Calculating the Slope of a ``Tile`` when ``targetCell`` is ``Data`` will now produce the correct result.
+- Introduce new hooks into AttributeStore API to allow for better performance in certain queries against catalogs with many layers
+- ``GeoTiffReader`` can now read tiffs that are missing the ``NewSubfileType`` tag.
+- Pyramiding code will once again respect resampling method and will now actually reduce shuffle volume by resampling
+  tiles on map side of pyramid operation
+- Uncompressed GeoTiffMultibandTiles will now convert to the correct CellType.
+- COGLayer attributes can be accessed via the various read attribute methods in
+  ``AttributeStore`` (ie ``readMetadata``, ``readHeader``, etc)
+- The regex used to match files for the ``HadoopLayerAttributeStore`` and ``FileLayerAttributeStore`` has been
+  expanded to include more characters.
+- ``HadoopAttributeStore.availableAttributes`` has been fixed so that it'll now list all attribute files.
+- Allow for simple features to be generated with a specified or random id with geometry stored in the standard
+  field, "the_geom"
+- Use a new Amazon SDK API to remove deprecation warnings.
+- Fixed a bug in incorrect metadata fetch by COGLayerReaders that could lead to an incorrect data querying.
+- Cropping RDDs with clamp=false now produces correct result
+
+1.2.1
+_____
+*2018 Jan 3*
+
+Fixes
+^^^^^
+
+- `GeoTiffSegmentLayout.getIntersectingSegments bounds checking <https://github.com/locationtech/geotrellis/pull/2534>`__
+- `Fix for area of vectorizer that can throw topology exceptions <https://github.com/locationtech/geotrellis/pull/2530>`__
+- `Fix Tile.flipHorizontal for floating point tiles <https://github.com/locationtech/geotrellis/pull/2535>`__
 
 1.2.0
 -----
@@ -60,6 +139,8 @@ API Changes
     folding of 3D tile layers into 2D tile layers.
   - The often-used ``apply`` method overloads in ``MapKeyTransform`` have been given
     more descriptive aliases.
+  - **Change:** Querying a layer will now produce a result whose metadata will have an ``Extent`` and
+    ``KeyBounds`` of the queried region and not of the whole layer.
 
 - ``geotrellis.vectortile`` (experimental)
 
@@ -375,6 +456,7 @@ to your application's needs. `See here for the specifics. <guide/vectors.html#nu
 Other New Features
 ******************
 
+- `Kerberos authentication is available for properly configured Accumulo clusters <https://github.com/locationtech/geotrellis/pull/2510>`__
 - `Polygonal Summaries for MultibandTiles <https://github.com/locationtech/geotrellis/pull/2374>`__
 - `Filter GeoTiffRDDs by Geometry <https://github.com/locationtech/geotrellis/pull/2409>`__
 - `Can create ValueReaders via URIs through LayerProvides classes <https://github.com/locationtech/geotrellis/pull/2286>`__

@@ -55,7 +55,7 @@ class FileLayerWriter(
   def overwrite[
     K: AvroRecordCodec: Boundable: JsonFormat: ClassTag,
     V: AvroRecordCodec: ClassTag,
-    M: JsonFormat: GetComponent[?, Bounds[K]]: Mergable
+    M: JsonFormat: Component[?, Bounds[K]]: Mergable
   ](
     id: LayerId,
     rdd: RDD[(K, V)] with Metadata[M]
@@ -66,11 +66,11 @@ class FileLayerWriter(
   def update[
     K: AvroRecordCodec: Boundable: JsonFormat: ClassTag,
     V: AvroRecordCodec: ClassTag,
-    M: JsonFormat: GetComponent[?, Bounds[K]]: Mergable
+    M: JsonFormat: Component[?, Bounds[K]]: Mergable
   ](
     id: LayerId,
     rdd: RDD[(K, V)] with Metadata[M],
-      mergeFunc: (V, V) => V
+    mergeFunc: (V, V) => V
   ): Unit = {
     update(id, rdd, Some(mergeFunc))
   }
@@ -78,7 +78,7 @@ class FileLayerWriter(
   private def update[
     K: AvroRecordCodec: Boundable: JsonFormat: ClassTag,
     V: AvroRecordCodec: ClassTag,
-    M: JsonFormat: GetComponent[?, Bounds[K]]: Mergable
+    M: JsonFormat: Component[?, Bounds[K]]: Mergable
   ](
     id: LayerId,
     rdd: RDD[(K, V)] with Metadata[M],
@@ -97,7 +97,7 @@ class FileLayerWriter(
         FileRDDWriter.update[K, V](rdd, layerPath, keyPath, Some(writerSchema), mergeFunc)
         
       case None =>
-        logger.warn(s"Skipping update with empty bounds for layer $id.")
+        logger.warn(s"Skipping update with empty bounds for $id.")
     }
   }
 
@@ -105,7 +105,7 @@ class FileLayerWriter(
   protected def _write[
     K: AvroRecordCodec: JsonFormat: ClassTag,
     V: AvroRecordCodec: ClassTag,
-    M: JsonFormat: GetComponent[?, Bounds[K]]
+    M: JsonFormat: Component[?, Bounds[K]]
   ](layerId: LayerId, rdd: RDD[(K, V)] with Metadata[M], keyIndex: KeyIndex[K]): Unit = {
     val catalogPathFile = new File(catalogPath)
 

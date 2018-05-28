@@ -2,16 +2,19 @@ import Dependencies._
 
 name := "geotrellis-spark"
 libraryDependencies ++= Seq(
-  sparkCore % "provided",
-  hadoopClient % "provided",
+  sparkCore % Provided,
+  hadoopClient % Provided,
   "com.google.uzaygezen" % "uzaygezen-core" % "0.2",
-  "org.scalaj" %% "scalaj-http" % "2.3.0",
+  "org.scalaj" %% "scalaj-http" % "2.4.0",
   avro,
   spire,
   monocleCore, monocleMacro,
   chronoscala,
-  scalazStream,
-  scalatest % "test",
+  catsCore,
+  catsEffect,
+  fs2Core,
+  fs2Io,
+  scalatest % Test,
   logging,
   scaffeine
 )
@@ -22,6 +25,8 @@ mimaPreviousArtifacts := Set(
 
 fork in Test := false
 parallelExecution in Test := false
+
+testOptions in Test += Tests.Argument("-oDF")
 
 initialCommands in console :=
   """

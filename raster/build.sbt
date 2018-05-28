@@ -2,40 +2,35 @@ import Dependencies._
 
 name := "geotrellis-raster"
 
-
 libraryDependencies ++= Seq(
-  typesafeConfig,
+  pureconfig,
   jts,
+  catsCore,
   spire,
   monocleCore,
   monocleMacro,
-  scalatest % "test",
-  scalacheck  % "test"
+  scalatest % Test,
+  scalacheck % Test
 )
-
-libraryDependencies := {
-  CrossVersion.partialVersion(scalaVersion.value) match {
-    // if scala 2.11+ is used, add dependency on scala-xml module
-    case Some((2, scalaMajor)) if scalaMajor >= 11 =>
-      libraryDependencies.value ++ Seq(
-        "org.scala-lang.modules" %% "scala-xml" % "1.0.6"
-      )
-    case _ =>
-      libraryDependencies.value
-  }
-}
 
 mimaPreviousArtifacts := Set(
   "org.locationtech.geotrellis" %% "geotrellis-raster" % Version.previousVersion
 )
 
-addCompilerPlugin("org.scalamacros" % "paradise" % "2.1.0" cross CrossVersion.full)
-
 sourceGenerators in Compile += (sourceManaged in Compile).map(Boilerplate.genRaster).taskValue
 
-initialCommands in console :=
-  """
-  import geotrellis.raster._
-  import geotrellis.raster.resample._
-  import geotrellis.vector._
-  """
+initialCommands in console :="""
+import geotrellis.raster._
+import geotrellis.raster.resample._
+import geotrellis.vector._
+import geotrellis.raster.io.geotiff._
+import geotrellis.raster.render._
+"""
+
+testOptions in Test += Tests.Setup{ () =>
+  val testArchive = "raster/data/geotiff-test-files.zip"
+  val testDirPath = "raster/data/geotiff-test-files"
+  if(!(new File(testDirPath)).exists) {
+    Unzip(testArchive, "raster/data")
+  }
+}

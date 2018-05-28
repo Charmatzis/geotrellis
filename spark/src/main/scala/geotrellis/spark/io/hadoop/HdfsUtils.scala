@@ -35,6 +35,9 @@ abstract class LineScanner extends Iterator[String] with java.io.Closeable
 
 object HdfsUtils extends LazyLogging {
 
+  def pathExists(path: Path, conf: Configuration): Boolean =
+    path.getFileSystem(conf).exists(path)
+
   def renamePath(from: Path, to: Path, conf: Configuration): Unit = {
     val fs = from.getFileSystem(conf)
     fs.rename(from, to)
@@ -240,7 +243,7 @@ object HdfsUtils extends LazyLogging {
       val codec = factory.getCodec(path)
 
       if (codec == null) {
-        println(s"No codec found for $path, writing without compression.")
+        logger.debug(s"No codec found for $path, writing without compression.")
         fs.create(path)
       } else {
         codec.createOutputStream(fs.create(path))
@@ -266,7 +269,7 @@ object HdfsUtils extends LazyLogging {
       val codec = factory.getCodec(path)
 
       if (codec == null) {
-        println(s"No codec found for $path, reading without compression.")
+        logger.debug(s"No codec found for $path, reading without compression.")
         fs.open(path)
       } else {
         codec.createInputStream(fs.open(path))

@@ -42,7 +42,7 @@ class CassandraLayerWriter(
   def overwrite[
     K: AvroRecordCodec: Boundable: JsonFormat: ClassTag,
     V: AvroRecordCodec: ClassTag,
-    M: JsonFormat: GetComponent[?, Bounds[K]]: Mergable
+    M: JsonFormat: Component[?, Bounds[K]]: Mergable
   ](
     id: LayerId,
     rdd: RDD[(K, V)] with Metadata[M]
@@ -53,7 +53,7 @@ class CassandraLayerWriter(
   def update[
     K: AvroRecordCodec: Boundable: JsonFormat: ClassTag,
     V: AvroRecordCodec: ClassTag,
-    M: JsonFormat: GetComponent[?, Bounds[K]]: Mergable
+    M: JsonFormat: Component[?, Bounds[K]]: Mergable
   ](
     id: LayerId,
     rdd: RDD[(K, V)] with Metadata[M],
@@ -65,7 +65,7 @@ class CassandraLayerWriter(
   private def update[
     K: AvroRecordCodec: Boundable: JsonFormat: ClassTag,
     V: AvroRecordCodec: ClassTag,
-    M: JsonFormat: GetComponent[?, Bounds[K]]: Mergable
+    M: JsonFormat: Component[?, Bounds[K]]: Mergable
   ](
     id: LayerId,
     rdd: RDD[(K, V)] with Metadata[M],
@@ -82,7 +82,7 @@ class CassandraLayerWriter(
         CassandraRDDWriter.update(rdd, instance, id, encodeKey, keyspace, table, Some(writerSchema), mergeFunc)
 
       case None =>
-        logger.warn(s"Skipping update with empty bounds for layer $id.")
+        logger.warn(s"Skipping update with empty bounds for $id.")
     }
   }
 
@@ -90,7 +90,7 @@ class CassandraLayerWriter(
   protected def _write[
     K: AvroRecordCodec: JsonFormat: ClassTag,
     V: AvroRecordCodec: ClassTag,
-    M: JsonFormat: GetComponent[?, Bounds[K]]
+    M: JsonFormat: Component[?, Bounds[K]]
   ](id: LayerId, rdd: RDD[(K, V)] with Metadata[M], keyIndex: KeyIndex[K]): Unit = {
     val codec  = KeyValueRecordCodec[K, V]
     val schema = codec.schema

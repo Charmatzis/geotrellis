@@ -50,6 +50,13 @@ object ProjectedRaster {
     */
   def apply[T <: CellGrid](tile: T, extent: Extent, crs: CRS): ProjectedRaster[T] =
     ProjectedRaster(Raster(tile, extent), crs)
+
+  /**
+    * Take a [[Tile]], and ProjectedExtent, and a CRS and use them to produce a
+    * [[ProjectedRaster]].
+    */
+  def apply[T <: CellGrid](tile: T, extent: ProjectedExtent): ProjectedRaster[T] =
+    ProjectedRaster(Raster(tile, extent.extent), extent.crs)
 }
 
 /**
@@ -59,4 +66,6 @@ case class ProjectedRaster[T <: CellGrid](raster: Raster[T], crs: CRS) {
   def tile = raster.tile
   def extent = raster.extent
   def projectedExtent = ProjectedExtent(extent, crs)
+  def cols = raster.cols
+  def rows = raster.rows
 }

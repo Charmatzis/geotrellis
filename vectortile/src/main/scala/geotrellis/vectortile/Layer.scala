@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 - 2017 Azavea
+ * Copyright 2016 Azavea
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -339,9 +339,9 @@ ${sortedMeta.map({ case (k,v) => s"            ${k}: ${v}"}).mkString("\n")}
 
     features.foreach { f =>
       f.getType match {
-        case POINT => points.append(f)
-        case LINESTRING => lines.append(f)
-        case POLYGON => polys.append(f)
+        case POINT => points += f
+        case LINESTRING => lines += f
+        case POLYGON => polys += f
         case _ => Unit // `UNKNOWN` or `Unrecognized`.
       }
     }

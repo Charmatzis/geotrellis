@@ -17,6 +17,10 @@
 package geotrellis.spark.pyramid
 
 import geotrellis.spark._
+import geotrellis.spark.io._
+import geotrellis.spark.io.avro._
+import geotrellis.spark.io.index.KeyIndexMethod
+import geotrellis.spark.io.json._
 import geotrellis.spark.tiling._
 import geotrellis.raster._
 import geotrellis.raster.merge._
@@ -27,8 +31,43 @@ import geotrellis.vector.Extent
 
 import org.apache.spark.Partitioner
 import org.apache.spark.rdd._
+import org.apache.spark.storage.StorageLevel
+import spray.json._
 
 import scala.reflect.ClassTag
+
+case class Pyramid[
+    K: SpatialComponent: ClassTag,
+    V <: CellGrid: ClassTag: ? => TilePrototypeMethods[V]: ? => TileMergeMethods[V],
+    M: Component[?, LayoutDefinition]: Component[?, Bounds[K]]
+](levels: Map[Int, RDD[(K, V)] with Metadata[M]]) {
+  def apply(level: Int): RDD[(K, V)] with Metadata[M] = levels(level)
+
+  def level(l: Int): RDD[(K, V)] with Metadata[M] = levels(l)
+
+  def lookup(zoom: Int, key: K): Seq[V] = levels(zoom).lookup(key)
+
+  def minZoom = levels.keys.min
+  def maxZoom = levels.keys.max
+
+  def persist(storageLevel: StorageLevel) = levels.mapValues{ _.persist(storageLevel) }
+
+  def write(
+    layerName: String,
+    writer: LayerWriter[LayerId],
+    keyIndexMethod: KeyIndexMethod[K]
+  )(
+    implicit arcK: AvroRecordCodec[K],
+    jsfK: JsonFormat[K],
+    arcV: AvroRecordCodec[V],
+    jsfM: JsonFormat[M]
+  ) = {
+    for (z <- maxZoom to minZoom by -1) {
+      writer.write[K, V, M](LayerId(layerName, z), levels(z), keyIndexMethod)
+    }
+  }
+
+}
 
 object Pyramid extends LazyLogging {
   case class Options(
@@ -42,11 +81,69 @@ object Pyramid extends LazyLogging {
     implicit def methodToOptions(m: ResampleMethod): Options = Options(resampleMethod = m)
   }
 
+  def fromLayerReader[
+    K: AvroRecordCodec: Boundable: JsonFormat: ClassTag: SpatialComponent,
+    V <: CellGrid: ? => TilePrototypeMethods[V]: ? => TileMergeMethods[V]: AvroRecordCodec: ClassTag,
+    M: JsonFormat: Component[?, Bounds[K]]: Component[?, LayoutDefinition]
+  ](layerName: String, layerReader: LayerReader[LayerId], maxZoom: Option[Int] = None, minZoom: Option[Int] = None): Pyramid[K, V, M] = {
+    val zooms = layerReader.attributeStore.availableZoomLevels(layerName)
+
+    val maxZoomLevel = maxZoom match {
+      case Some(z) =>
+        if (z > zooms.max)
+          throw new IllegalArgumentException(s"Requested max zoom of $z is greater than max available zoom of ${zooms.max}")
+        else z
+      case None => zooms.max
+    }
+    val minZoomLevel = maxZoom match {
+      case Some(z) =>
+        if (z < zooms.min)
+          throw new IllegalArgumentException(s"Requested min zoom of $z is greater than min available zoom of ${zooms.min}")
+        else z
+      case None => zooms.min
+    }
+
+    val seq = for (z <- maxZoomLevel to minZoomLevel by -1) yield {
+      (z, layerReader.read[K, V, M](LayerId(layerName, z)))
+    }
+    Pyramid[K, V, M](seq.toMap)
+  }
+
+  def fromLayerRdd[
+    K: SpatialComponent: ClassTag,
+    V <: CellGrid: ClassTag: ? => TilePrototypeMethods[V]: ? => TileMergeMethods[V],
+    M: Component[?, LayoutDefinition]: Component[?, Bounds[K]]
+  ](rdd: RDD[(K, V)] with Metadata[M],
+    thisZoom: Option[Int] = None,
+    endZoom: Option[Int] = None,
+    resampleMethod: ResampleMethod = Average,
+    partitioner: Option[Partitioner] = None
+  ): Pyramid[K, V, M] = {
+    val opts = Options(resampleMethod, partitioner)
+    val gridBounds = rdd.metadata.getComponent[Bounds[K]] match {
+      case kb: KeyBounds[K] => kb.toGridBounds
+      case _ => throw new IllegalArgumentException("Cannot construct a pyramid for an empty layer")
+    }
+    val maxDim = math.max(gridBounds.width, gridBounds.height).toDouble
+    val levels = math.ceil(math.log(maxDim)/math.log(2)).toInt
+
+    (thisZoom, endZoom) match {
+      case (None, None) => Pyramid(levelStream(rdd, new LocalLayoutScheme, levels, 0, opts).toMap)
+      case (Some(start), None) => Pyramid(levelStream(rdd, new LocalLayoutScheme, start, math.max(0, start - levels), opts).toMap)
+      case (None, Some(end)) => Pyramid(levelStream(rdd, new LocalLayoutScheme, end + levels, end, opts).toMap)
+      case (Some(start), Some(end)) => Pyramid(levelStream(rdd, new LocalLayoutScheme, start, end, opts).toMap)
+    }
+  }
+
   /** Resample base layer to generate the next level "up" in the pyramid.
     *
-    * When building the next pyramid level each tile is resampled individually, without sampling pixels from neighboring tiles.
-    * In the common case of [[ZoomedLayoutScheme]], used when building a power of two pyramid, this means that
-    * each resampled pixel is going to be equidistant to four pixels in the base layer.
+    * Builds the pyramid level with a cell size twice that of the input level---the "next level up" in the pyramid.
+    * Each tile is resampled individually, without sampling pixels from neighboring tiles to speed up the process.
+    * The algorithm proceeds by reducing the input tiles by half using a resampling method over 2x2 pixel neighborhoods.
+    * We support all [[AggregateResampleMethod]]s as well as NearestNeighbor and Bilinear resampling.  Nearest neighbor
+    * resampling is, strictly speaking, non-deterministic in this setting, but is included to support categorical layers
+    * (e.g., NLCD).  Given this method, input tile layers are obviously expected to comprise tiles with even pixel
+    * dimensions.
     *
     * @param rdd           the base layer to be resampled
     * @param layoutScheme  the scheme used to generate next pyramid level
@@ -58,7 +155,7 @@ object Pyramid extends LazyLogging {
     */
   def up[
     K: SpatialComponent: ClassTag,
-    V <: CellGrid: ClassTag: ? => TileMergeMethods[V]: ? => TilePrototypeMethods[V],
+    V <: CellGrid: ClassTag: ? => TilePrototypeMethods[V]: ? => TileMergeMethods[V],
     M: Component[?, LayoutDefinition]: Component[?, Bounds[K]]
   ](rdd: RDD[(K, V)] with Metadata[M],
     layoutScheme: LayoutScheme,
@@ -67,9 +164,15 @@ object Pyramid extends LazyLogging {
   ): (Int, RDD[(K, V)] with Metadata[M]) = {
     val Options(resampleMethod, partitioner) = options
 
+    assert(!Seq(CubicConvolution, CubicSpline, Lanczos).contains(resampleMethod),
+           s"${resampleMethod} resample method is not supported for pyramid construction")
+
     val sourceLayout = rdd.metadata.getComponent[LayoutDefinition]
     val sourceBounds = rdd.metadata.getComponent[Bounds[K]]
     val LayoutLevel(nextZoom, nextLayout) = layoutScheme.zoomOut(LayoutLevel(zoom, sourceLayout))
+
+    assert(sourceLayout.tileCols % 2 == 0 && sourceLayout.tileRows % 2 == 0,
+           s"Pyramid operation requires tiles with even dimensions, got ${sourceLayout.tileCols} x ${sourceLayout.tileRows}")
 
     val nextKeyBounds =
       sourceBounds match {
@@ -103,35 +206,35 @@ object Pyramid extends LazyLogging {
         .setComponent(nextKeyBounds)
 
     // Functions for combine step
-    def createTiles(tile: (K, V)): Seq[(K, V)]                             = Seq(tile)
-    def mergeTiles1(tiles: Seq[(K, V)], tile: (K, V)): Seq[(K, V)]         = tiles :+ tile
-    def mergeTiles2(tiles1: Seq[(K, V)], tiles2: Seq[(K, V)]): Seq[(K, V)] = tiles1 ++ tiles2
+    def createTiles(tile: Raster[V]): Seq[Raster[V]]                                = Seq(tile)
+    def mergeTiles1(tiles: Seq[Raster[V]], tile: Raster[V]): Seq[Raster[V]]         = tiles :+ tile
+    def mergeTiles2(tiles1: Seq[Raster[V]], tiles2: Seq[Raster[V]]): Seq[Raster[V]] = tiles1 ++ tiles2
 
     val nextRdd = {
-     val transformedRdd = rdd
+      val transformedRdd = rdd
         .map { case (key, tile) =>
           val extent: Extent = key.getComponent[SpatialKey].extent(sourceLayout)
           val newSpatialKey = nextLayout.mapTransform(extent.center)
+
           // Resample the tile on the map side of the pyramid step.
           // This helps with shuffle size.
-          val resampled = tile.prototype(nextLayout.tileLayout.tileCols, nextLayout.tileLayout.tileRows)
+          val resampled = tile.prototype(sourceLayout.tileCols / 2, sourceLayout.tileRows / 2)
           resampled.merge(extent, extent, tile, resampleMethod)
 
-          (key.setComponent(newSpatialKey), (key, resampled))
+          (key.setComponent(newSpatialKey), Raster(resampled, extent))
         }
 
-        partitioner
-          .fold(transformedRdd.combineByKey(createTiles, mergeTiles1, mergeTiles2))(transformedRdd.combineByKey(createTiles _, mergeTiles1 _, mergeTiles2 _, _))
-          .mapPartitions ( partition => partition.map { case (newKey: K, seq: Seq[(K, V)]) =>
-            val newExtent = newKey.getComponent[SpatialKey].extent(nextLayout)
-            val newTile = seq.head._2.prototype(nextLayout.tileLayout.tileCols, nextLayout.tileLayout.tileRows)
+      partitioner
+        .fold(transformedRdd.combineByKey(createTiles, mergeTiles1, mergeTiles2))(transformedRdd.combineByKey(createTiles _, mergeTiles1 _, mergeTiles2 _, _))
+        .mapPartitions ( partition => partition.map { case (newKey: K, seq: Seq[Raster[V]]) =>
+           val newExtent = newKey.getComponent[SpatialKey].extent(nextLayout)
+           val newTile = seq.head.tile.prototype(nextLayout.tileLayout.tileCols, nextLayout.tileLayout.tileRows)
 
-            for ((oldKey, tile) <- seq) {
-              val oldExtent = oldKey.getComponent[SpatialKey].extent(sourceLayout)
-              newTile.merge(newExtent, oldExtent, tile, NearestNeighbor)
-            }
-            (newKey, newTile: V)
-          },  preservesPartitioning = true)
+           for (raster <- seq) {
+             newTile.merge(newExtent, raster.extent, raster.tile, NearestNeighbor)
+           }
+           (newKey, newTile: V)
+        },  preservesPartitioning = true)
     }
 
     nextZoom -> new ContextRDD(nextRdd, nextMetadata)
