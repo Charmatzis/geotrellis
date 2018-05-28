@@ -49,30 +49,52 @@ class GeoTiffWriterTests extends FunSuite
     val rr = FileRangeReader(p)
     val reader = StreamingByteReader(rr)
 
-    val gt1 = MultibandGeoTiff(reader)
     val gt2 = MultibandGeoTiff.streaming(reader)
-    val gt3 = MultibandGeoTiff.compressed(p)
+    val gt3 = MultibandGeoTiff(p)
+    val gt1 = gt3.tile.toArrayTile
 
-    withClue("Assumption failed: Reading GeoTiff two ways didn't match") {
-      assertEqual(gt2.tile, gt1.tile)
+      withClue("Assumption failed: Reading GeoTiff two ways didn't match") {
+      assertEqual(gt2.tile, gt1)
     }
 
     withClue("Assumption failed: Reading GeoTiff compressed doesn't work") {
-      assertEqual(gt3.tile, gt1.tile)
+      assertEqual(gt3.tile, gt1)
     }
 
     gt3.write(path)
 
     val resultComp = MultibandGeoTiff(path)
     withClue("Writing from a compressed read produced incorrect GeoTiff.") {
-      assertEqual(resultComp.tile, gt1.tile)
+      assertEqual(resultComp.tile, gt1)
     }
 
     gt2.write(path)
 
     val result = MultibandGeoTiff(path)
     withClue("Writing from a streaming read produced incorrect GeoTiff.") {
-      assertEqual(result.tile, gt1.tile)
+      assertEqual(result.tile, gt1)
     }
+  }
+
+  test("Writing out a bit raster and reading it back again") {
+    val temp = File.createTempFile("geotiff-writer", ".tif")
+    val path = temp.getPath
+
+    // ExpandPacked8ToByte1
+
+    // val (p1, p2) = ("/Users/rob/data/DevelopedLand-ch.tiff", "/Users/rob/data/DevelopedLand-ch-2.tiff")
+    val (p1, p2) = ("/Users/rob/data/DevelopedLand-sm.tiff", "/Users/rob/data/DevelopedLand-sm-2.tiff")
+    // val (p1, p2) = ("/Users/rob/data/DevelopedLand-df.tiff", "/Users/rob/data/DevelopedLand-df-2.tiff")
+    val p3 = "/users/rob/data/DevelopedLand-sm-nb.tiff"
+    val base = SinglebandGeoTiff(geoTiffPath("small-bit-raster.tif"))
+    val tiff = SinglebandGeoTiff(base.tile, base.extent, base.crs)
+
+    GeoTiffWriter.write(tiff, path)
+
+    val reread = SinglebandGeoTiff(path)
+
+    addToPurge(path)
+
+    assertEqual(reread.raster.tile, base.raster.tile)
   }
 }

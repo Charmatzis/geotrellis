@@ -1,20 +1,39 @@
+/*
+ * Copyright 2018 Azavea
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package geotrellis.raster.io.geotiff
 
 private [geotiff] trait SegmentTransform {
   def segmentIndex: Int
-  def segmentLayout: GeoTiffSegmentLayout
+  def segmentLayoutTransform: GeoTiffSegmentLayoutTransform
+  protected def segmentLayout = segmentLayoutTransform.segmentLayout
 
-  def layoutCols: Int = segmentLayout.tileLayout.layoutCols
-  def layoutRows: Int = segmentLayout.tileLayout.layoutRows
+  protected def bandCount = segmentLayoutTransform.bandCount
 
-  def tileCols: Int = segmentLayout.tileLayout.tileCols
-  def tileRows: Int = segmentLayout.tileLayout.tileRows
+  protected def layoutCols: Int = segmentLayout.tileLayout.layoutCols
+  protected def layoutRows: Int = segmentLayout.tileLayout.layoutRows
 
-  def layoutCol: Int = segmentIndex % layoutCols
-  def layoutRow: Int = segmentIndex / layoutCols
+  protected def tileCols: Int = segmentLayout.tileLayout.tileCols
+  protected def tileRows: Int = segmentLayout.tileLayout.tileRows
+
+  protected def layoutCol: Int = segmentIndex % layoutCols
+  protected def layoutRow: Int = segmentIndex / layoutCols
 
   val (segmentCols, segmentRows) =
-    segmentLayout.getSegmentDimensions(segmentIndex)
+    segmentLayoutTransform.getSegmentDimensions(segmentIndex)
 
   /** The col of the source raster that this index represents. Can produce invalid cols */
   def indexToCol(i: Int) = {
@@ -36,7 +55,7 @@ private [geotiff] trait SegmentTransform {
 }
 
 
-private [geotiff] case class StripedSegmentTransform(segmentIndex: Int, bandCount: Int, segmentLayout: GeoTiffSegmentLayout) extends SegmentTransform {
+private [geotiff] case class StripedSegmentTransform(segmentIndex: Int, segmentLayoutTransform: GeoTiffSegmentLayoutTransform) extends SegmentTransform {
   def gridToIndex(col: Int, row: Int): Int = {
     val tileCol = col - (layoutCol * tileCols)
     val tileRow = row - (layoutRow * tileRows)
@@ -50,7 +69,7 @@ private [geotiff] case class StripedSegmentTransform(segmentIndex: Int, bandCoun
   }
 }
 
-private [geotiff] case class TiledSegmentTransform(segmentIndex: Int, bandCount: Int, segmentLayout: GeoTiffSegmentLayout) extends SegmentTransform {
+private [geotiff] case class TiledSegmentTransform(segmentIndex: Int, segmentLayoutTransform: GeoTiffSegmentLayoutTransform) extends SegmentTransform {
   def gridToIndex(col: Int, row: Int): Int = {
     val tileCol = col - (layoutCol * tileCols)
     val tileRow = row - (layoutRow * tileRows)

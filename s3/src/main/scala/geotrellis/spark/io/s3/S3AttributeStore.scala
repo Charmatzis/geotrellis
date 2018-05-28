@@ -125,7 +125,7 @@ class S3AttributeStore(val bucket: String, val prefix: String) extends BlobLayer
 
   def layerIds: Seq[LayerId] =
     s3Client
-      .listObjectsIterator(bucket, path(prefix, "_attributes"))
+      .listObjectsIterator(bucket, path(prefix, "_attributes/metadata"))
       .toList
       .map { os =>
         val List(zoomStr, name) = new java.io.File(os.getKey).getName.split(SEP).reverse.take(2).toList
@@ -137,6 +137,20 @@ class S3AttributeStore(val bucket: String, val prefix: String) extends BlobLayer
     layerKeys(layerId).map { key =>
       new java.io.File(key).getName.split(SEP).head
     }
+  }
+
+  override def availableZoomLevels(layerName: String): Seq[Int] = {
+    s3Client
+      .listObjectsIterator(bucket, path(prefix, s"_attributes/metadata${SEP}${layerName}"))
+      .toList
+      .flatMap { os =>
+        val List(zoomStr, foundName) = new java.io.File(os.getKey).getName.split(SEP).reverse.take(2).toList
+        if (foundName == layerName)
+          Some(zoomStr.replace(".json", "").toInt)
+        else
+          None
+      }
+      .distinct
   }
 }
 

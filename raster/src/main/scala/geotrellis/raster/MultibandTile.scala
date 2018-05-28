@@ -60,7 +60,7 @@ trait MultibandTile extends CellGrid with MacroCombinableMultibandTile[Tile] wit
     */
   def band(bandIndex: Int): Tile
 
-  /** Safely fetch a band from a [[MultiBandTile]], given some band index
+  /** Safely fetch a band from a [[MultibandTile]], given some band index
     * which may or may not be valid.
     */
   def bandSafe(bandIndex: Int): Option[Tile] =
@@ -279,4 +279,8 @@ trait MultibandTile extends CellGrid with MacroCombinableMultibandTile[Tile] wit
     */
   def combineDouble(b0: Int, b1: Int)(f: (Double, Double) => Double): Tile
 
+  /**
+    * Convert the present [[MultibandTile]] to an [[MultibandTile]] of [[ArrayTile]]s.
+    */
+  def toArrayTile(): ArrayMultibandTile
 }

@@ -22,10 +22,22 @@ import geotrellis.raster.io.geotiff.tags._
 import monocle.syntax.apply._
 import geotrellis.raster.io.geotiff.util._
 
+/**
+  * LazySegmentBytes represents a lazy GeoTiff segments reader
+  *
+  * TODO: Use default parameters instead of constructor overloads
+  *
+  * @param byteReader
+  * @param tiffTags
+  * @param maxChunkSize   32 * 1024 * 1024 by default
+  * @param maxOffsetBetweenChunks   1024 by default, max distance between two segments in a group
+  *                                 used in a chunkSegments function
+  */
 class LazySegmentBytes(
   byteReader: ByteReader,
   tiffTags: TiffTags,
-  maxChunkSize: Int = 32 * 1024 * 1024
+  maxChunkSize: Int = 32 * 1024 * 1024,
+  maxOffsetBetweenChunks: Int = 1024
 ) extends SegmentBytes with LazyLogging {
   import LazySegmentBytes.Segment
 
@@ -65,26 +77,29 @@ class LazySegmentBytes(
     }}.toSeq
       .sortBy(_.startOffset) // sort segments such that we inspect them in disk order
       .foldLeft((0l, List(List.empty[Segment]))) { case ((chunkSize, headChunk :: commitedChunks), seg) =>
-      if (chunkSize + seg.size <= maxChunkSize)
+      // difference of offsets should be <= maxOffsetBetweenChunks
+      // otherwise everything between these offsets would be read by reader
+      // and the intention is to group segments by location and to limit groups by size
+      val isSegmentNearChunk =
+        headChunk.headOption.map { c =>
+          seg.startOffset - c.endOffset <= maxOffsetBetweenChunks
+        }.getOrElse(true)
+
+      if (chunkSize + seg.size <= maxChunkSize && isSegmentNearChunk)
         (chunkSize + seg.size) -> ((seg :: headChunk) :: commitedChunks)
       else
         seg.size -> ((seg :: Nil) :: headChunk :: commitedChunks)
     }
-  }._2.reverse // get segments back in offset order
-
+  }._2.reverse.map(_.reverse) // get segments back in offset order
 
   protected def readChunk(segments: List[Segment]): Map[Int, Array[Byte]] = {
-    val chunkStartOffset = segments.minBy(_.startOffset).startOffset
-    val chunkEndOffset = segments.maxBy(_.endOffset).endOffset
-    byteReader.position(chunkStartOffset)
-    logger.debug(s"Fetching segments ${segments.map(_.id).mkString(", ")} at [$chunkStartOffset, $chunkEndOffset]")
-    val chunkBytes = getBytes(chunkStartOffset, chunkEndOffset - chunkStartOffset + 1)
-    for { segment <- segments } yield {
-      val segmentStart = (segment.startOffset - chunkStartOffset).toInt
-      val segmentEnd = (segment.endOffset - chunkStartOffset).toInt
-      segment.id -> java.util.Arrays.copyOfRange(chunkBytes, segmentStart, segmentEnd + 1)
-    }
-  }.toMap
+    segments
+      .map { segment =>
+        logger.debug(s"Fetching segment ${segment.id} at [${segment.startOffset}, ${segment.endOffset}]")
+        segment.id -> getBytes(segment.startOffset, segment.endOffset - segment.startOffset + 1)
+      }
+      .toMap
+  }
 
   def getSegment(i: Int): Array[Byte] = {
     val startOffset = segmentOffsets(i)
@@ -94,12 +109,13 @@ class LazySegmentBytes(
   }
 
   def getSegments(indices: Traversable[Int]): Iterator[(Int, Array[Byte])] = {
-    chunkSegments(indices)
+    val chunks = chunkSegments(indices)
+    chunks
       .toIterator
-      .flatMap( chunk => readChunk(chunk))
+      .flatMap(chunk => readChunk(chunk))
   }
 
-  private def getBytes(offset: Long, length: Long): Array[Byte] = {
+  private[geotrellis] def getBytes(offset: Long, length: Long): Array[Byte] = {
     byteReader.position(offset)
     byteReader.getBytes(length.toInt)
   }

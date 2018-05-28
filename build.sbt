@@ -1,6 +1,10 @@
 import Dependencies._
+import de.heikoseeberger.sbtheader._
 import sbt.Keys._
-import de.heikoseeberger.sbtheader.license.Apache2_0
+
+scalaVersion := Version.scala
+
+scalaVersion in ThisBuild := Version.scala
 
 lazy val commonSettings = Seq(
   version := Version.geotrellis,
@@ -22,7 +26,9 @@ lazy val commonSettings = Seq(
     "-language:postfixOps",
     "-language:existentials",
     "-language:experimental.macros",
-    "-feature"),
+    "-feature",
+    "-Ypartial-unification" // Required by Cats
+  ),
   publishMavenStyle := true,
   publishArtifact in Test := false,
   pomIncludeRepository := { _ => false },
@@ -66,17 +72,31 @@ lazy val commonSettings = Seq(
         <url>http://github.com/lossyrob/</url>
       </developer>
     </developers>),
-  shellPrompt := { s => Project.extract(s).currentProject.id + " > " },
-  dependencyUpdatesExclusions := moduleFilter(organization = "org.scala-lang"),
 
+  shellPrompt := { s => Project.extract(s).currentProject.id + " > " },
+  dependencyUpdatesFilter := moduleFilter(organization = "org.scala-lang"),
   resolvers ++= Seq(
     "geosolutions" at "http://maven.geo-solutions.it/",
     "osgeo" at "http://download.osgeo.org/webdav/geotools/"
   ),
-  headers := Map(
-    "scala" -> Apache2_0("2016", "Azavea"),
-    "conf" -> Apache2_0("2016", "Azavea", "#")
-  )
+  headerLicense := Some(HeaderLicense.ALv2("2018", "Azavea")),
+  // preserve year of old headers
+  headerMappings :=
+    Map(FileType.scala -> CommentStyle.cStyleBlockComment.copy(commentCreator = new CommentCreator() {
+      val Pattern = "(?s).*?(\\d{4}(-\\d{4})?).*".r
+      def findYear(header: String): Option[String] = header match {
+        case Pattern(years, _) => Some(years)
+        case _                 => None
+      }
+      override def apply(text: String, existingText: Option[String]): String = {
+        val newText = CommentStyle.cStyleBlockComment.commentCreator.apply(text, existingText)
+        existingText
+          .flatMap(findYear)
+          .map(year => newText.replace("2018", year))
+          .getOrElse(newText)
+      } } )),
+  scapegoatVersion in ThisBuild := "1.3.3",
+  updateOptions := updateOptions.value.withGigahorse(false)
 )
 
 lazy val root = Project("geotrellis", file(".")).
@@ -98,6 +118,7 @@ lazy val root = Project("geotrellis", file(".")).
     slick,
     spark,
     `spark-etl`,
+    `spark-pipeline`,
     `spark-testkit`,
     util,
     vector,
@@ -132,7 +153,7 @@ lazy val vector = project
   )
 
 lazy val `vector-testkit` = project
-  .dependsOn(raster % "provided", vector % "provided")
+  .dependsOn(raster % Provided, vector % Provided)
   .settings(commonSettings)
 
 lazy val proj4 = project
@@ -150,7 +171,7 @@ lazy val raster = project
   )
 
 lazy val `raster-testkit` = project
-  .dependsOn(raster % "provided", vector % "provided")
+  .dependsOn(raster % Provided, vector % Provided)
   .settings(commonSettings)
 
 lazy val slick = project
@@ -158,7 +179,7 @@ lazy val slick = project
   .settings(commonSettings)
 
 lazy val spark = project
-  .dependsOn(util, raster, `raster-testkit` % "test", `vector-testkit` % "test")
+  .dependsOn(util, raster, `raster-testkit` % Test, `vector-testkit` % Test)
   .settings(commonSettings)
   .settings(
     // This takes care of a pseudo-cyclic dependency between the `spark` test scope, `spark-testkit`,
@@ -174,7 +195,7 @@ lazy val `spark-testkit` = project
 lazy val s3 = project
   .dependsOn(
     spark % "compile->compile;test->test",  // <-- spark-testkit update should simplify this
-    `spark-testkit` % "test"
+    `spark-testkit` % Test
   )
   .settings(commonSettings)
   .settings(
@@ -188,21 +209,21 @@ lazy val `s3-testkit` = project
 lazy val accumulo = project
   .dependsOn(
     spark % "compile->compile;test->test", // <-- spark-testkit update should simplify this
-    `spark-testkit` % "test"
+    `spark-testkit` % Test
   )
   .settings(commonSettings)
 
 lazy val cassandra = project
   .dependsOn(
     spark % "compile->compile;test->test", // <-- spark-testkit update should simplify this
-    `spark-testkit` % "test"
+    `spark-testkit` % Test
   )
   .settings(commonSettings)
 
 lazy val hbase = project
   .dependsOn(
     spark % "compile->compile;test->test", // <-- spark-testkit update should simplify this
-    `spark-testkit` % "test"
+    `spark-testkit` % Test
   )
   .settings(commonSettings) // HBase depends on its own protobuf version
   .settings(projectDependencies := { Seq((projectID in spark).value.exclude("com.google.protobuf", "protobuf-java")) })
@@ -211,25 +232,29 @@ lazy val `spark-etl` = Project(id = "spark-etl", base = file("spark-etl")).
   dependsOn(spark, s3, accumulo, cassandra, hbase).
   settings(commonSettings)
 
+lazy val `spark-pipeline` = Project(id = "spark-pipeline", base = file("spark-pipeline")).
+  dependsOn(spark, s3, `spark-testkit` % "test").
+  settings(commonSettings)
+
 lazy val geotools = project
-  .dependsOn(raster, vector, proj4, `vector-testkit` % "test", `raster-testkit` % "test",
+  .dependsOn(raster, vector, proj4, `vector-testkit` % Test, `raster-testkit` % Test,
     `raster` % "test->test" // <-- to get rid  of this, move `GeoTiffTestUtils` to the testkit.
   )
   .settings(commonSettings)
 
 lazy val geomesa = project
-  .dependsOn(`spark-testkit` % "test", spark, geotools, accumulo)
+  .dependsOn(`spark-testkit` % Test, spark, geotools, accumulo)
   .settings(commonSettings)
 
 lazy val geowave = project
   .dependsOn(
     spark % "compile->compile;test->test", // <-- spark-testkit update should simplify this
-    `spark-testkit` % "test", geotools, accumulo
+    `spark-testkit` % Test, geotools, accumulo
   )
   .settings(commonSettings)
 
 lazy val shapefile = project
-  .dependsOn(raster, `raster-testkit` % "test")
+  .dependsOn(raster, `raster-testkit` % Test)
   .settings(commonSettings)
 
 lazy val util = project

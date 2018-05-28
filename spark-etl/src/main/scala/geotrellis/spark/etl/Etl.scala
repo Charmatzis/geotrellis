@@ -16,7 +16,7 @@
 
 package geotrellis.spark.etl
 
-import geotrellis.raster.{CellGrid, CellSize}
+import geotrellis.raster.{CellGrid, CellSize, Raster}
 import geotrellis.raster.crop.CropMethods
 import geotrellis.raster.merge.TileMergeMethods
 import geotrellis.raster.prototype.TilePrototypeMethods
@@ -54,7 +54,7 @@ object Etl {
   def ingest[
     I: Component[?, ProjectedExtent]: TypeTag: ? => TilerKeyMethods[I, K],
     K: SpatialComponent: Boundable: TypeTag,
-    V <: CellGrid: TypeTag: Stitcher: (? => TileReprojectMethods[V]): (? => CropMethods[V]): (? => TileMergeMethods[V]): (? => TilePrototypeMethods[V])
+    V <: CellGrid: TypeTag: RasterRegionReproject: Stitcher: (? => TileReprojectMethods[V]): (? => CropMethods[V]): (? => TileMergeMethods[V]): (? => TilePrototypeMethods[V])
   ](
      args: Seq[String], modules: Seq[TypedModule] = Etl.defaultModules
    )(implicit sc: SparkContext) = {
@@ -138,10 +138,10 @@ case class Etl(conf: EtlConf, @transient modules: Seq[TypedModule] = Etl.default
     */
   def tile[
     I: Component[?, ProjectedExtent]: (? => TilerKeyMethods[I, K]),
-    V <: CellGrid: Stitcher: ClassTag: (? => TileMergeMethods[V]): (? => TilePrototypeMethods[V]):
+    V <: CellGrid: RasterRegionReproject: Stitcher: ClassTag: (? => TileMergeMethods[V]): (? => TilePrototypeMethods[V]):
     (? => TileReprojectMethods[V]): (? => CropMethods[V]),
     K: SpatialComponent: Boundable: ClassTag
-  ](rdd: RDD[(I, V)], method: ResampleMethod = output.resampleMethod)(implicit sc: SparkContext): (Int, RDD[(K, V)] with Metadata[TileLayerMetadata[K]]) = {
+  ](rdd: RDD[(I, V)], method: ResampleMethod = output.resampleMethod): (Int, RDD[(K, V)] with Metadata[TileLayerMetadata[K]]) = {
     val targetCellType = output.cellType
     val destCrs = output.getCrs.get
 
@@ -165,8 +165,7 @@ case class Etl(conf: EtlConf, @transient modules: Seq[TypedModule] = Etl.default
         partitioner = new HashPartitioner(
           partitions = (math.pow(2, (resolutionRatio - 1) * 2) * rdd.partitions.length).toInt))
 
-      val tiledRDD = rdd.tileToLayout[K](tiledMD, tilerOptions)
-      ContextRDD(tiledRDD, tiledMD)
+      rdd.tileToLayout[K](tiledMD, tilerOptions)
     }
 
     output.reprojectMethod match {

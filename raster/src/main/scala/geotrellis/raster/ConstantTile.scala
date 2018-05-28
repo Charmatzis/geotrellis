@@ -150,7 +150,7 @@ trait ConstantTile extends Tile {
     * @param   f  A function from Int to Int, executed at each point of the tile
     * @return     The result, a [[Tile]]
     */
-  def map(f: Int => Int): Tile = IntConstantTile(f(iVal), cols, rows)
+  def map(f: Int => Int): Tile
 
   /**
     * Combine two tiles' cells into new cells using the given integer
@@ -171,7 +171,7 @@ trait ConstantTile extends Tile {
     * @param   f  A function from Double to Double, executed at each point of the tile
     * @return     The result, a [[Tile]]
     */
-  def mapDouble(f: Double => Double): Tile = DoubleConstantTile(f(dVal), cols, rows)
+  def mapDouble(f: Double => Double): Tile
 
   /**
     * Combine two tiles' cells into new cells using the given double
@@ -285,14 +285,14 @@ case class BitConstantTile(v: Boolean, cols: Int, rows: Int) extends ConstantTil
     *
     * @return  An [[ArrayTile]]
     */
-  def toArrayTile(): ArrayTile = mutable()
+  def toArrayTile(): ArrayTile = mutable
 
   /**
     * Return the [[MutableArrayTile]] equivalent of this tile.
     *
     * @return  The MutableArrayTile
     */
-  def mutable(): MutableArrayTile = BitArrayTile.fill(v, cols, rows)
+  def mutable: MutableArrayTile = BitArrayTile.fill(v, cols, rows)
 
   /**
     * Return the underlying data behind this tile as an array.
@@ -302,6 +302,10 @@ case class BitConstantTile(v: Boolean, cols: Int, rows: Int) extends ConstantTil
   def toBytes(): Array[Byte] = Array(iVal.toByte)
 
   def withNoData(noDataValue: Option[Double]): ConstantTile  =  this
+
+  def map(f: Int => Int): Tile = BitConstantTile(f(iVal), cols, rows)
+
+  def mapDouble(f: Double => Double): Tile = BitConstantTile(d2i(f(dVal)), cols, rows)
 }
 
 /**
@@ -312,7 +316,7 @@ case class ByteConstantTile(v: Byte, cols: Int, rows: Int,
 ) extends ConstantTile {
   protected val (iVal: Int, dVal: Double) =
     cellType match {
-      case _: ConstantNoData =>
+      case _: ConstantNoData[_] =>
         (b2i(v), b2d(v))
       case _: NoNoData =>
         (v.toInt, v.toDouble)
@@ -331,7 +335,8 @@ case class ByteConstantTile(v: Byte, cols: Int, rows: Int,
     *
     * @return  The MutableArrayTile
     */
-  def mutable(): MutableArrayTile = ByteArrayTile.fill(v, cols, rows, cellType)
+
+  def mutable: MutableArrayTile = ByteArrayTile.fill(v, cols, rows, cellType)
 
   /**
     * Return the underlying data behind this tile as an array.
@@ -342,6 +347,10 @@ case class ByteConstantTile(v: Byte, cols: Int, rows: Int,
 
   def withNoData(noDataValue: Option[Double]) =
     ByteConstantTile(v, cols, rows, cellType.withNoData(noDataValue))
+
+  def map(f: Int => Int): Tile = ByteConstantTile(i2b(f(iVal)), cols, rows, cellType)
+
+  def mapDouble(f: Double => Double): Tile = ByteConstantTile(d2b(f(dVal)), cols, rows)
 }
 
 object ByteConstantTile {
@@ -371,7 +380,7 @@ case class UByteConstantTile(v: Byte, cols: Int, rows: Int,
 
   protected val (iVal: Int, dVal: Double) =
     cellType match {
-      case _: ConstantNoData =>
+      case _: ConstantNoData[_] =>
         (ub2i(v), ub2d(v))
       case _: NoNoData =>
         (v.toInt, v.toDouble)
@@ -383,14 +392,15 @@ case class UByteConstantTile(v: Byte, cols: Int, rows: Int,
   /**
     * Another name for the 'mutable' method on this class.
     */
-  def toArrayTile(): ArrayTile = mutable()
+  def toArrayTile(): ArrayTile = mutable
 
   /**
     * Return the [[MutableArrayTile]] equivalent of this tile.
     *
     * @return  The MutableArrayTile
     */
-  def mutable(): MutableArrayTile = UByteArrayTile.fill(v, cols, rows, cellType)
+  def mutable: MutableArrayTile = UByteArrayTile.fill(v, cols, rows, cellType)
+
 
   /**
     * Return the underlying data behind this tile as an array.
@@ -412,6 +422,10 @@ case class UByteConstantTile(v: Byte, cols: Int, rows: Int,
 
   def withNoData(noDataValue: Option[Double]) =
     UByteConstantTile(v, cols, rows, cellType.withNoData(noDataValue))
+
+  def map(f: Int => Int): Tile = UByteConstantTile(i2ub(f(iVal)), cols, rows, cellType)
+
+  def mapDouble(f: Double => Double): Tile = UByteConstantTile(d2ub(f(dVal)), cols, rows)
 }
 
 object UByteConstantTile {
@@ -441,7 +455,7 @@ case class ShortConstantTile(v: Short, cols: Int, rows: Int,
 
   protected val (iVal: Int, dVal: Double) =
     cellType match {
-      case _: ConstantNoData =>
+      case _: ConstantNoData[_] =>
         (s2i(v), s2d(v))
       case _: NoNoData =>
         (v.toInt, v.toDouble)
@@ -453,14 +467,15 @@ case class ShortConstantTile(v: Short, cols: Int, rows: Int,
   /**
     * Another name for the 'mutable' method on this class.
     */
-  def toArrayTile(): ArrayTile = mutable()
+  def toArrayTile(): ArrayTile = mutable
 
   /**
     * Return the [[MutableArrayTile]] equivalent of this tile.
     *
     * @return  The MutableArrayTile
     */
-  def mutable(): MutableArrayTile = ShortArrayTile.fill(v, cols, rows, cellType)
+  def mutable: MutableArrayTile = ShortArrayTile.fill(v, cols, rows, cellType)
+
 
   /**
     * Return the underlying data behind this tile as an array.
@@ -475,6 +490,10 @@ case class ShortConstantTile(v: Short, cols: Int, rows: Int,
 
   def withNoData(noDataValue: Option[Double]) =
     ShortConstantTile(v, cols, rows, cellType.withNoData(noDataValue))
+
+  def map(f: Int => Int): Tile = ShortConstantTile(i2s(f(iVal)), cols, rows, cellType)
+
+  def mapDouble(f: Double => Double): Tile = ShortConstantTile(d2s(f(dVal)), cols, rows)
 }
 
 object ShortConstantTile {
@@ -504,7 +523,7 @@ case class UShortConstantTile(v: Short, cols: Int, rows: Int,
 
   protected val (iVal: Int, dVal: Double) =
     cellType match {
-      case _: ConstantNoData =>
+      case _: ConstantNoData[_] =>
         (us2i(v), us2d(v))
       case _: NoNoData =>
         (v.toInt, v.toDouble)
@@ -516,14 +535,14 @@ case class UShortConstantTile(v: Short, cols: Int, rows: Int,
   /**
     * Another name for the 'mutable' method on this class.
     */
-  def toArrayTile(): ArrayTile = mutable()
+  def toArrayTile(): ArrayTile = mutable
 
   /**
     * Return the [[MutableArrayTile]] equivalent of this tile.
     *
     * @return  The MutableArrayTile
     */
-  def mutable(): MutableArrayTile = UShortArrayTile.fill(v, cols, rows, cellType)
+  def mutable: MutableArrayTile = UShortArrayTile.fill(v, cols, rows, cellType)
 
   /**
     * Return the underlying data behind this tile as an array.
@@ -549,6 +568,10 @@ case class UShortConstantTile(v: Short, cols: Int, rows: Int,
 
   def withNoData(noDataValue: Option[Double]) =
     UShortConstantTile(v, cols, rows, cellType.withNoData(noDataValue))
+
+  def map(f: Int => Int): Tile = UShortConstantTile(i2us(f(iVal)), cols, rows, cellType)
+
+  def mapDouble(f: Double => Double): Tile = UShortConstantTile(d2us(f(dVal)), cols, rows)
 }
 
 object UShortConstantTile {
@@ -578,7 +601,7 @@ case class IntConstantTile(v: Int, cols: Int, rows: Int,
 
   protected val (iVal: Int, dVal: Double) =
     cellType match {
-      case _: ConstantNoData =>
+      case _: ConstantNoData[_] =>
         (v, i2d(v))
       case _: NoNoData =>
         (v, v.toDouble)
@@ -590,14 +613,14 @@ case class IntConstantTile(v: Int, cols: Int, rows: Int,
   /**
     * Another name for the 'mutable' method on this class.
     */
-  def toArrayTile(): ArrayTile = mutable()
+  def toArrayTile(): ArrayTile = mutable
 
   /**
     * Return the [[MutableArrayTile]] equivalent of this tile.
     *
     * @return  The MutableArrayTile
     */
-  def mutable(): MutableArrayTile = IntArrayTile.fill(v, cols, rows, cellType)
+  def mutable: MutableArrayTile = IntArrayTile.fill(v, cols, rows, cellType)
 
   /**
     * Return the underlying data behind this tile as an array.
@@ -612,6 +635,10 @@ case class IntConstantTile(v: Int, cols: Int, rows: Int,
 
   def withNoData(noDataValue: Option[Double]) =
     IntConstantTile(v, cols, rows, cellType.withNoData(noDataValue))
+
+  def map(f: Int => Int): Tile = IntConstantTile(f(iVal), cols, rows, cellType)
+
+  def mapDouble(f: Double => Double): Tile = IntConstantTile(d2i(f(dVal)), cols, rows)
 }
 
 object IntConstantTile {
@@ -641,7 +668,7 @@ case class FloatConstantTile(v: Float, cols: Int, rows: Int,
 
   protected val (iVal: Int, dVal: Double) =
     cellType match {
-      case _: ConstantNoData =>
+      case _: ConstantNoData[_] =>
         (f2i(v), f2d(v))
       case _: NoNoData =>
         (v.toInt, v.toDouble)
@@ -653,14 +680,14 @@ case class FloatConstantTile(v: Float, cols: Int, rows: Int,
   /**
     * Another name for the 'mutable' method on this class.
     */
-  def toArrayTile(): ArrayTile = mutable()
+  def toArrayTile(): ArrayTile = mutable
 
   /**
     * Return the [[MutableArrayTile]] equivalent of this tile.
     *
     * @return  The MutableArrayTile
     */
-  def mutable(): MutableArrayTile = FloatArrayTile.fill(v, cols, rows, cellType)
+  def mutable: MutableArrayTile = FloatArrayTile.fill(v, cols, rows, cellType)
 
   /**
     * Return the underlying data behind this tile as an array.
@@ -675,6 +702,10 @@ case class FloatConstantTile(v: Float, cols: Int, rows: Int,
 
   def withNoData(noDataValue: Option[Double]) =
     FloatConstantTile(v, cols, rows, cellType.withNoData(noDataValue))
+
+  def map(f: Int => Int): Tile = FloatConstantTile(i2f(f(iVal)), cols, rows, cellType)
+
+  def mapDouble(f: Double => Double): Tile = FloatConstantTile(d2f(f(dVal)), cols, rows)
 }
 
 object FloatConstantTile {
@@ -705,7 +736,7 @@ case class DoubleConstantTile(v: Double, cols: Int, rows: Int,
 
   protected val (iVal: Int, dVal: Double) =
     cellType match {
-      case _: ConstantNoData =>
+      case _: ConstantNoData[_] =>
         (d2i(v), v)
       case _: NoNoData =>
         (v.toInt, v)
@@ -717,14 +748,14 @@ case class DoubleConstantTile(v: Double, cols: Int, rows: Int,
   /**
     * Another name for the 'mutable' method on this class.
     */
-  def toArrayTile(): ArrayTile = mutable()
+  def toArrayTile(): ArrayTile = mutable
 
   /**
     * Return the [[MutableArrayTile]] equivalent of this tile.
     *
     * @return  The MutableArrayTile
     */
-  def mutable(): MutableArrayTile = DoubleArrayTile.fill(dVal, cols, rows, cellType)
+  def mutable: MutableArrayTile = DoubleArrayTile.fill(dVal, cols, rows, cellType)
 
   /**
     * Return the underlying data behind this tile as an array.
@@ -739,6 +770,10 @@ case class DoubleConstantTile(v: Double, cols: Int, rows: Int,
 
   def withNoData(noDataValue: Option[Double]): ConstantTile =
     DoubleConstantTile(v, cols, rows, cellType.withNoData(noDataValue))
+
+  def map(f: Int => Int): Tile = DoubleConstantTile(i2d(f(iVal)), cols, rows, cellType)
+
+  def mapDouble(f: Double => Double): Tile = DoubleConstantTile(f(dVal), cols, rows)
 }
 
 object DoubleConstantTile {

@@ -16,56 +16,51 @@
 
 package geotrellis.spark.io
 
-import geotrellis.spark.LayerId
-
+import geotrellis.spark._
 import com.github.blemale.scaffeine.Scaffeine
-import spray.json.JsonFormat
-import com.typesafe.config.ConfigFactory
+import geotrellis.spark.io.hadoop.conf.AttributeConfig
 
 import scala.concurrent.duration._
-
-object AttributeCaching {
-  private val config = ConfigFactory.load()
-  val expiration: Int = config.getInt("geotrellis.attribute.caching.expirationMinutes")
-  val maxSize: Int = config.getInt("geotrellis.attribute.caching.maxSize")
-  val enabled: Boolean = config.getBoolean("geotrellis.attribute.caching.enabled")
-}
+import spray.json._
+import spray.json.DefaultJsonProtocol._
 
 trait AttributeCaching { self: AttributeStore =>
-  import AttributeCaching._
-
-  private final val cache = {
+  @transient private lazy val cache =
     Scaffeine()
       .recordStats()
-      .expireAfterWrite(expiration.minutes)
-      .maximumSize(maxSize)
-      .build[(LayerId, String), Any]
-  }
+      .expireAfterWrite(AttributeConfig.caching.expirationMinutes.minutes)
+      .maximumSize(AttributeConfig.caching.maxSize)
+      .build[(LayerId, String), JsValue]
 
-  def cacheRead[T: JsonFormat](layerId: LayerId, attributeName: String): T = {
-    if(enabled)
-      cache.get(layerId -> attributeName, { _ => read[T](layerId, attributeName) }).asInstanceOf[T]
+  def cacheRead[T: JsonFormat](layerId: LayerId, attributeName: String): T =
+    if(AttributeConfig.caching.enabled)
+      cache.get(layerId -> attributeName, { _ => read[JsValue](layerId, attributeName) }).convertTo[T]
     else
-      read[T](layerId, attributeName)
-  }
+      read[JsValue](layerId, attributeName).convertTo[T]
+
+  def cacheLayerType(layerId: LayerId, layerType: LayerType): LayerType =
+    if (AttributeConfig.caching.enabled)
+      cache.get(layerId -> "layerType", { _ => layerType.toJson }).convertTo[LayerType]
+    else
+      layerType
 
   def cacheWrite[T: JsonFormat](layerId: LayerId, attributeName: String, value: T): Unit = {
-    if(enabled) cache.put(layerId -> attributeName, value)
+    if(AttributeConfig.caching.enabled) cache.put(layerId -> attributeName, value.toJson)
     write[T](layerId, attributeName, value)
   }
 
   def clearCache(): Unit = {
-    if(enabled) cache.invalidateAll()
+    if(AttributeConfig.caching.enabled) cache.invalidateAll()
   }
 
   def clearCache(id: LayerId): Unit = {
-    if(enabled) {
+    if(AttributeConfig.caching.enabled) {
       val toInvalidate = cache.asMap.keys.filter(_._1 == id)
       cache.invalidateAll(toInvalidate)
     }
   }
 
   def clearCache(id: LayerId, attribute: String): Unit = {
-    if(enabled) cache.invalidate(id -> attribute)
+    if(AttributeConfig.caching.enabled) cache.invalidate(id -> attribute)
   }
 }

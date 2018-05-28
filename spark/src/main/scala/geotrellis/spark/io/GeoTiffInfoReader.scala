@@ -22,6 +22,8 @@ import geotrellis.raster.io.geotiff.reader.GeoTiffReader.GeoTiffInfo
 import geotrellis.raster.io.geotiff.tags.TiffTags
 import geotrellis.util.LazyLogging
 import geotrellis.vector.Geometry
+import geotrellis.raster.GridBounds
+import geotrellis.raster.io.geotiff.GeoTiffSegmentLayoutTransform
 
 import org.apache.spark.SparkContext
 import org.apache.spark.rdd.RDD
@@ -34,6 +36,9 @@ private [geotrellis] trait GeoTiffInfoReader extends LazyLogging {
   def geoTiffInfoRdd(implicit sc: SparkContext): RDD[String]
   def getGeoTiffInfo(uri: String): GeoTiffInfo
   def getGeoTiffTags(uri: String): TiffTags
+
+  def getSegmentLayoutTransform(geoTiffInfo: GeoTiffInfo): GeoTiffSegmentLayoutTransform =
+    GeoTiffSegmentLayoutTransform(geoTiffInfo.segmentLayout, geoTiffInfo.bandCount)
 
   /**
     * Generates and partitions windows for GeoTiff based on desired window size
@@ -57,7 +62,7 @@ private [geotrellis] trait GeoTiffInfoReader extends LazyLogging {
           info.segmentLayout.listWindows(maxSize)
       }
 
-    info.segmentLayout.partitionWindowsBySegments(windows, partitionBytes / info.cellType.bytes)
+    info.segmentLayout.partitionWindowsBySegments(windows, partitionBytes / math.max(info.cellType.bytes, 1))
   }
 
   def readWindows[O, I, K, V](

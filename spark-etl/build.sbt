@@ -3,8 +3,8 @@ import Dependencies._
 name := "geotrellis-spark-etl"
 libraryDependencies ++= Seq(
   jsonSchemaValidator,
-  sparkCore % "provided",
-  scalatest % "test"
+  sparkCore % Provided,
+  scalatest % Test
 )
 
 test in assembly := {}
@@ -19,7 +19,8 @@ assemblyShadeRules in assembly := {
     ShadeRule.rename("com.fasterxml.jackson.**" -> s"$shadePackage.com.fasterxml.jackson.@1")
       .inLibrary(jsonSchemaValidator).inAll,
     ShadeRule.rename("org.apache.avro.**" -> s"$shadePackage.org.apache.avro.@1")
-      .inLibrary("com.azavea.geotrellis" %% "geotrellis-spark" % Version.geotrellis).inAll
+      .inLibrary("com.azavea.geotrellis" %% "geotrellis-spark" % Version.geotrellis).inAll,
+    ShadeRule.rename("shapeless.**" -> s"$shadePackage.shapeless.@1").inAll
   )
 }
 

@@ -27,9 +27,9 @@ class BitGeoTiffMultibandTile(
   segmentLayout: GeoTiffSegmentLayout,
   compression: Compression,
   bandCount: Int,
-  hasPixelInterleave: Boolean,
-  val cellType: BitCells with NoDataHandling
-) extends GeoTiffMultibandTile(compressedBytes, decompressor, segmentLayout, compression, bandCount, hasPixelInterleave)
+  val cellType: BitCells with NoDataHandling,
+  overviews: List[BitGeoTiffMultibandTile] = Nil
+) extends GeoTiffMultibandTile(compressedBytes, decompressor, segmentLayout, compression, bandCount, overviews)
     with BitGeoTiffSegmentCollection {
 
   protected def createSegmentCombiner(targetSize: Int): SegmentCombiner =
@@ -48,16 +48,15 @@ class BitGeoTiffMultibandTile(
         arr
     }
 
-  def withNoData(noDataValue: Option[Double]) =
-    new BitGeoTiffMultibandTile(compressedBytes, decompressor, segmentLayout, compression, bandCount, hasPixelInterleave, cellType.withNoData(noDataValue))
+  def withNoData(noDataValue: Option[Double]): BitGeoTiffMultibandTile =
+    new BitGeoTiffMultibandTile(compressedBytes, decompressor, segmentLayout, compression, bandCount, cellType.withNoData(noDataValue), overviews.map(_.withNoData(noDataValue)))
 
-  def interpretAs(newCellType: CellType)  = {
+  def interpretAs(newCellType: CellType): GeoTiffMultibandTile = {
     newCellType match {
       case dt: BitCells with NoDataHandling =>
-        new BitGeoTiffMultibandTile(compressedBytes, decompressor, segmentLayout, compression, bandCount, hasPixelInterleave, dt)
+        new BitGeoTiffMultibandTile(compressedBytes, decompressor, segmentLayout, compression, bandCount, dt, overviews.map(_.interpretAs(newCellType)).collect { case gt: BitGeoTiffMultibandTile => gt })
       case _ =>
         withNoData(None).convert(newCellType)
     }
   }
 }
-

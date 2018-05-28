@@ -16,15 +16,16 @@
 
 package geotrellis.spark.io.hadoop
 
-import geotrellis.spark.io.LayerHeader
+import geotrellis.spark.io.{LayerHeader, LayerType, AvroLayerType}
 
-import org.apache.hadoop.fs.Path
+import java.net.URI
 import spray.json._
 
 case class HadoopLayerHeader(
   keyClass: String,
   valueClass: String,
-  path: Path
+  path: URI,
+  layerType: LayerType = AvroLayerType
 ) extends LayerHeader {
   def format = "hdfs"
 }
@@ -36,16 +37,27 @@ object HadoopLayerHeader {
         "format" -> JsString(md.format),
         "keyClass" -> JsString(md.keyClass),
         "valueClass" -> JsString(md.valueClass),
-        "path" -> JsString(md.path.toString)
+        "path" -> JsString(md.path.toString),
+        "layerType" -> md.layerType.toJson
       )
 
     def read(value: JsValue): HadoopLayerHeader =
-      value.asJsObject.getFields("keyClass", "valueClass", "path") match {
+      value.asJsObject.getFields("keyClass", "valueClass", "path", "layerType") match {
+        case Seq(JsString(keyClass), JsString(valueClass), JsString(path), layerType) =>
+          HadoopLayerHeader(
+            keyClass,
+            valueClass,
+            new URI(path),
+            layerType.convertTo[LayerType]
+          )
+
         case Seq(JsString(keyClass), JsString(valueClass), JsString(path)) =>
           HadoopLayerHeader(
-            keyClass, 
+            keyClass,
             valueClass,
-            new Path(path))
+            new URI(path),
+            AvroLayerType
+          )
         case _ =>
           throw new DeserializationException(s"HadoopLayerMetadata expected, got: $value")
       }

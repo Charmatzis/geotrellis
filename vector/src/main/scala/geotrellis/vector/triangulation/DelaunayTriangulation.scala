@@ -1,3 +1,19 @@
+/*
+ * Copyright 2018 Azavea
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package geotrellis.vector.triangulation
 
 import org.apache.commons.math3.linear.{MatrixUtils, RealMatrix}
@@ -445,7 +461,7 @@ case class DelaunayTriangulation(
         base = connector.next
         best = null
       }
-      
+
     }
 
     (first.flip.next, end, tris)
@@ -468,7 +484,7 @@ case class DelaunayTriangulation(
       e = rotCWSrc(e)
     } while (e != e0)
     do {
-      pts.prepend(Point.jtsCoord2Point(pointSet.getCoordinate(getDest(e))))
+      Point.jtsCoord2Point(pointSet.getCoordinate(getDest(e))) +=: pts
       setNext(getPrev(getFlip(e)), getNext(e))
       val b = getFlip(getNext(e))
       setIncidentEdge(getDest(e), b)
@@ -490,13 +506,13 @@ case class DelaunayTriangulation(
 
     decoupleVertex(vi)
 
-    // in the event of a boundary with no fill triangles, set the boundary 
-    // reference in case we destroyed the old boundary edge (happens when 
+    // in the event of a boundary with no fill triangles, set the boundary
+    // reference in case we destroyed the old boundary edge (happens when
     // corner points are deleted)
     if (bnd != None) {
       _boundary = getFlip(bnd.get)
     }
-  
+
     // merge triangles
     val edges = Map.empty[(Int, Int), Int]
     tris.foreach { case (ix, h) => {
@@ -517,7 +533,7 @@ case class DelaunayTriangulation(
             join(newtri, opp)
           case None =>
             edges.get(b.vert -> b.src) match {
-              case Some(opp) => 
+              case Some(opp) =>
                 edges -= (b.vert -> b.src)
                 join(newtri, opp)
               case None =>
@@ -584,7 +600,7 @@ case class DelaunayTriangulation(
       triverts += k
     }
 
-    triangleMap.getTriangles.foreach { case ((i1, i2, i3), t0) => 
+    triangleMap.getTriangles.foreach { case ((i1, i2, i3), t0) =>
       var t = t0
       var i = 0
 
@@ -620,7 +636,7 @@ case class DelaunayTriangulation(
       }
     }
 
-    allVertices.foreach{ v => 
+    allVertices.foreach{ v =>
       val t = edgeIncidentTo(v)
       if (!triedges.contains(t)) {
         println(s"edgeIncidentTo($v) refers to non-interior or stale edge [${getSrc(t)} -> ${getDest(t)}] (ID: ${t})")
